@@ -71,6 +71,7 @@ def test_model_options_expose_fp16_registry_with_denoise_hints():
     assert [name for name, _ in options] == [
         "realesr-general-x4v3",
         "realesr-general-wdn-x4v3",
+        "RealESRGAN_x2plus",
         "RealESRGAN_x4plus_anime_6B",
         "RealESRGAN_x4plus_fp16",
     ]

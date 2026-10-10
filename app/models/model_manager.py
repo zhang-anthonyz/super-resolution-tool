@@ -15,13 +15,23 @@ from ..core.types import Backend, ModelMeta, Scene
 _MODEL_NAMES = (
     "realesr-general-x4v3",
     "realesr-general-wdn-x4v3",
+    "RealESRGAN_x2plus",
     "RealESRGAN_x4plus_anime_6B",
     "RealESRGAN_x4plus_fp16",
 )
 
+_MODEL_SCALES = {
+    "realesr-general-x4v3": 4,
+    "realesr-general-wdn-x4v3": 4,
+    "RealESRGAN_x2plus": 2,
+    "RealESRGAN_x4plus_anime_6B": 4,
+    "RealESRGAN_x4plus_fp16": 4,
+}
+
 _MODEL_PATHS = {
     "realesr-general-x4v3": Path("models/onnx/realesr-general-x4v3.onnx"),
     "realesr-general-wdn-x4v3": Path("models/onnx/realesr-general-wdn-x4v3.onnx"),
+    "RealESRGAN_x2plus": Path("models/onnx/RealESRGAN_x2plus.onnx"),
     "RealESRGAN_x4plus_anime_6B": Path(
         "models/onnx/RealESRGAN_x4plus_anime_6B.onnx"
     ),
@@ -34,6 +44,9 @@ _MODEL_DESCRIPTIONS = {
     ),
     "realesr-general-wdn-x4v3": (
         "真实/3D·CG，SRVGG 轻量通用模型，强降噪"
+    ),
+    "RealESRGAN_x2plus": (
+        "真实，RRDB 2x 模型，适合轻度放大（2 倍）"
     ),
     "RealESRGAN_x4plus_anime_6B": (
         "2D 动漫，RRDB 模型，边缘自然，无降噪"
@@ -55,13 +68,14 @@ def builtin_models() -> list[ModelMeta]:
     scene_by_name = {
         "realesr-general-x4v3": Scene.REALISTIC,
         "realesr-general-wdn-x4v3": Scene.REALISTIC,
+        "RealESRGAN_x2plus": Scene.REALISTIC,
         "RealESRGAN_x4plus_anime_6B": Scene.ANIME_2D,
         "RealESRGAN_x4plus_fp16": Scene.REALISTIC,
     }
     return [
         ModelMeta(
             name=name,
-            scale=4,
+            scale=_MODEL_SCALES[name],
             scene=scene_by_name[name],
             backend=Backend.DIRECTML,
             model_path=_MODEL_PATHS[name],
