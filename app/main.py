@@ -42,9 +42,10 @@ def _run_headless_smoke() -> int:
 
     try:
         ffmpeg_path = app_root() / "vendor" / "ffmpeg.exe"
-        model_path = app_root() / "models" / "onnx" / "RealESRGAN_x4plus.onnx"
         if not ffmpeg_path.is_file():
             raise FileNotFoundError(f"Packaged FFmpeg is missing: {ffmpeg_path}")
+        default_model = scene_default(Scene.REALISTIC)
+        model_path = app_root() / default_model.model_path
         if not model_path.is_file():
             raise FileNotFoundError(f"Packaged model is missing: {model_path}")
 
@@ -60,7 +61,7 @@ def _run_headless_smoke() -> int:
             output = root / "output_x4.png"
             Image.new("RGB", (32, 24), (80, 120, 160)).save(source)
 
-            engine = load_model(scene_default(Scene.REALISTIC))
+            engine = load_model(default_model)
             result = upscale_single(source, output, engine, scale=4)
             if not result.ok or not output.is_file():
                 raise RuntimeError(f"Headless upscale failed: {result.error}")

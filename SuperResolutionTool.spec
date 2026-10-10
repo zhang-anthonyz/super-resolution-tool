@@ -7,14 +7,18 @@ from PyInstaller.utils.hooks import collect_dynamic_libs, collect_submodules
 
 project_root = Path(SPECPATH).resolve()
 
+onnx_models = [
+    (str(path), "models/onnx")
+    for path in (project_root / "models" / "onnx").glob("*.onnx")
+]
+
 datas = [
     (str(project_root / "vendor" / "ffmpeg.exe"), "vendor"),
     (str(project_root / "vendor" / "ffprobe.exe"), "vendor"),
-    (
-        str(project_root / "models" / "onnx" / "RealESRGAN_x4plus.onnx"),
-        "models/onnx",
-    ),
-]
+    (str(project_root / "vendor" / "realesrgan-ncnn-vulkan.exe"), "vendor"),
+    (str(project_root / "vendor" / "vcomp140.dll"), "vendor"),
+    (str(project_root / "vendor" / "ncnn-models"), "vendor/ncnn-models"),
+] + onnx_models
 
 binaries = collect_dynamic_libs("onnxruntime")
 hiddenimports = collect_submodules("onnxruntime.capi")
