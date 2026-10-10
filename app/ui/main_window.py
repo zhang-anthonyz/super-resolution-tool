@@ -48,6 +48,13 @@ from .model_selector import ModelSelector
 from .workers import ImageUpscaleWorker, VideoUpscaleWorker
 
 
+_PROGRESS_CHUNK_QSS = "QProgressBar::chunk { background-color: %s; border-radius: 4px; }"
+_PROGRESS_COLOR_SUCCESS = "#16A34A"
+_PROGRESS_COLOR_ERROR = "#DC2626"
+_PROGRESS_COLOR_PARTIAL = "#D97706"
+_PROGRESS_COLOR_CANCELLED = "#9CA3AF"
+
+
 VIDEO_CODEC_OPTIONS: tuple[tuple[VideoCodec, str], ...] = (
     (VideoCodec.H264, "H.264"),
     (VideoCodec.HEVC, "HEVC"),
@@ -487,13 +494,21 @@ class MainWindow(QMainWindow):
         if folder:
             self.video_output_dir_edit.setText(folder)
 
+    def _set_progress_color(self, bar: QProgressBar, color: str) -> None:
+        bar.setStyleSheet(_PROGRESS_CHUNK_QSS % color)
+
+    def _reset_progress_color(self, bar: QProgressBar) -> None:
+        bar.setStyleSheet("")
+
     def _reset_image_progress(self) -> None:
         self.image_progress.setRange(0, 100)
         self.image_progress.setValue(0)
+        self._reset_progress_color(self.image_progress)
 
     def _reset_video_progress(self) -> None:
         self.video_progress.setRange(0, 100)
         self.video_progress.setValue(0)
+        self._reset_progress_color(self.video_progress)
 
     def start_image_upscale(self) -> None:
         if self._image_worker is not None and self._image_worker.isRunning():
@@ -752,6 +767,12 @@ class MainWindow(QMainWindow):
         )
         self.image_progress.setRange(0, 100)
         self.image_progress.setValue(100 if results else 0)
+        if results and fail_count == 0:
+            self._set_progress_color(self.image_progress, _PROGRESS_COLOR_SUCCESS)
+        elif ok_count == 0:
+            self._set_progress_color(self.image_progress, _PROGRESS_COLOR_ERROR)
+        else:
+            self._set_progress_color(self.image_progress, _PROGRESS_COLOR_PARTIAL)
         self.image_status.setText(
             f"完成：成功 {ok_count} / 失败 {fail_count}"
         )
@@ -782,6 +803,7 @@ class MainWindow(QMainWindow):
         self._set_image_running(False)
         self.image_progress.setRange(0, 100)
         self.image_progress.setValue(0)
+        self._set_progress_color(self.image_progress, _PROGRESS_COLOR_ERROR)
         self.image_status.setText("处理失败")
         self.image_log.append("Error", message)
         self._cleanup_image_worker()
@@ -790,6 +812,7 @@ class MainWindow(QMainWindow):
         self._set_image_running(False)
         self.image_progress.setRange(0, 100)
         self.image_progress.setValue(0)
+        self._set_progress_color(self.image_progress, _PROGRESS_COLOR_CANCELLED)
         self.image_status.setText("已取消")
         self.image_log.append("Warning", "任务已取消")
         self._cleanup_image_worker()
@@ -798,6 +821,7 @@ class MainWindow(QMainWindow):
         self._set_video_running(False)
         self.video_progress.setRange(0, 100)
         self.video_progress.setValue(100)
+        self._set_progress_color(self.video_progress, _PROGRESS_COLOR_SUCCESS)
         self.video_status.setText("完成")
         elapsed = float(getattr(result, "elapsed_seconds", 0.0) or 0.0)
         self.video_log.append(
@@ -811,6 +835,7 @@ class MainWindow(QMainWindow):
         self._set_video_running(False)
         self.video_progress.setRange(0, 100)
         self.video_progress.setValue(0)
+        self._set_progress_color(self.video_progress, _PROGRESS_COLOR_ERROR)
         self.video_status.setText("处理失败")
         self.video_log.append("Error", message)
         self._cleanup_video_worker()
@@ -819,6 +844,7 @@ class MainWindow(QMainWindow):
         self._set_video_running(False)
         self.video_progress.setRange(0, 100)
         self.video_progress.setValue(0)
+        self._set_progress_color(self.video_progress, _PROGRESS_COLOR_CANCELLED)
         self.video_status.setText("已取消")
         self.video_log.append("Warning", "任务已取消")
         self._cleanup_video_worker()
