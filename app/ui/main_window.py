@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
     QFormLayout,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -24,6 +25,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QTabWidget,
     QVBoxLayout,
@@ -222,15 +224,20 @@ class MainWindow(QMainWindow):
         return page
 
     def _build_image_tab(self) -> QWidget:
-        page = QWidget()
-        layout = QVBoxLayout(page)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+
+        content = QWidget()
+        layout = QVBoxLayout(content)
         layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(14)
+        layout.setSpacing(12)
 
         input_group = QGroupBox("输入图片")
         input_layout = QVBoxLayout(input_group)
         self.image_list = QListWidget()
         self.image_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
+        self.image_list.setMinimumHeight(140)
         input_buttons = QHBoxLayout()
         self.image_add_files_button = QPushButton("添加文件")
         self.image_add_folder_button = QPushButton("添加文件夹")
@@ -244,12 +251,12 @@ class MainWindow(QMainWindow):
         input_buttons.addStretch(1)
         input_layout.addWidget(self.image_list, 1)
         input_layout.addLayout(input_buttons)
-        layout.addWidget(input_group, 2)
+        layout.addWidget(input_group)
 
         self.image_scale_selector = ScaleSelector()
         self.image_model_selector = ModelSelector(
             self.backend_options,
-            parent=page,
+            parent=content,
             scale_selector=self.image_scale_selector,
         )
         layout.addWidget(self.image_model_selector)
@@ -292,14 +299,21 @@ class MainWindow(QMainWindow):
         layout.addWidget(run_group)
 
         self.image_log = LogPanel()
-        layout.addWidget(self.image_log, 2)
-        return page
+        self.image_log.setMinimumHeight(120)
+        layout.addWidget(self.image_log)
+
+        scroll.setWidget(content)
+        return scroll
 
     def _build_video_tab(self) -> QWidget:
-        page = QWidget()
-        layout = QVBoxLayout(page)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+
+        content = QWidget()
+        layout = QVBoxLayout(content)
         layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(14)
+        layout.setSpacing(12)
 
         input_group = QGroupBox("输入视频")
         input_form = QFormLayout(input_group)
@@ -334,7 +348,7 @@ class MainWindow(QMainWindow):
         self.video_scale_selector = ScaleSelector()
         self.video_model_selector = ModelSelector(
             self.backend_options,
-            parent=page,
+            parent=content,
             scale_selector=self.video_scale_selector,
         )
         layout.addWidget(self.video_model_selector)
@@ -372,8 +386,11 @@ class MainWindow(QMainWindow):
         layout.addWidget(run_group)
 
         self.video_log = LogPanel()
-        layout.addWidget(self.video_log, 2)
-        return page
+        self.video_log.setMinimumHeight(120)
+        layout.addWidget(self.video_log)
+
+        scroll.setWidget(content)
+        return scroll
 
     def _connect_signals(self) -> None:
         self.image_start_button.clicked.connect(self.start_image_upscale)
