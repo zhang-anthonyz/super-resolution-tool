@@ -1,0 +1,25 @@
+# 配置文件示例（复制为 config.yaml 使用）
+
+app:
+  language: zh_CN
+  theme: dark          # dark / light
+
+inference:
+  backend: auto        # auto / cuda / tensorrt / directml / vulkan / openvino / cpu
+  precision: auto      # auto / fp16 / fp32
+  tile_size: 0         # 0 = 自动（按显存余量）
+
+video:
+  codec: h264          # h264 / hevc（默认 h264）
+  crf: 18              # 质量（越小越高）
+  audio_copy: true     # 音频原样复制 remux
+
+models:
+  dir: ./models/onnx   # ONNX 模型缓存目录
+  mirror: ""           # 下载镜像（首次运行）
+
+paths:
+  ffmpeg: ./vendor/ffmpeg.exe
+  ffprobe: ./vendor/ffprobe.exe
+  ncnn: ./vendor/realesrgan-ncnn-vulkan.exe
+  anime4k: ./vendor/anime4kcpp/

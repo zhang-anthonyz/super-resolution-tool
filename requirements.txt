@@ -1,0 +1,15 @@
+# 运行时依赖（打包进 PyInstaller）
+# 核心
+numpy>=1.24,<2.0
+Pillow>=10.0
+PySide6>=6.5
+
+# ONNX 推理（双后端，构建期分别解包到 runtime/cuda 与 runtime/dml，不直接 pip 同时安装两者）
+#   onnxruntime-gpu      → runtime/cuda  （CUDA/TensorRT EP）
+#   onnxruntime-directml → runtime/dml   （DirectML EP）
+
+# NVIDIA 信息
+nvidia-ml-py>=12.0
+
+# 开发/测试
+pytest>=7.0
