@@ -177,6 +177,7 @@ def build_model_meta(
     scene: Scene,
     backend: Backend,
     fixed_scale: Optional[int] = None,
+    denoise_pair_path: Optional[Path] = None,
 ) -> ModelMeta:
     """Build a runtime model descriptor for the selected UI settings."""
     path = resolve_project_path(model_path)
@@ -188,6 +189,7 @@ def build_model_meta(
         scene=scene,
         backend=backend,
         model_path=path,
+        denoise_pair_path=denoise_pair_path,
         input_name="input",
         output_name="output",
         scale_input=None,

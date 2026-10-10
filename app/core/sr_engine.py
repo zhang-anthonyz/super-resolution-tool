@@ -54,6 +54,7 @@ class SuperResEngine(ABC):
         image: np.ndarray,          # RGB、HWC、uint8
         scale: int = 4,
         progress_cb: Optional[Callable[[ProgressInfo], None]] = None,
+        denoise_strength: float = 0.5,
     ) -> np.ndarray:                # 返回 RGB、HWC、uint8
         """超分单张图片。
 
@@ -73,16 +74,25 @@ class OnnxEngine(SuperResEngine):
     def __init__(self, backend: Backend):
         super().__init__(backend)
         self._session = None
+        self._pair_session = None
         self._model: Optional[ModelMeta] = None
         self._input_name: Optional[str] = None
         self._output_name: Optional[str] = None
         self._output_channels: Optional[int] = None
+        self._pair_input_name: Optional[str] = None
+        self._pair_output_name: Optional[str] = None
+        self._pair_output_channels: Optional[int] = None
         self._fp16 = False
         self._precision = "fp16" if backend == Backend.CUDA else "fp32"
 
     def load_model(self, model: ModelMeta) -> None:
-        if not model.model_path.is_file():
-            raise FileNotFoundError(f"ONNX 模型不存在: {model.model_path}")
+        model_path = self._resolve_model_path(model.model_path)
+        if not model_path.is_file():
+            raise FileNotFoundError(f"ONNX 模型不存在: {model_path}")
+
+        pair_path = self._resolve_pair_path(model)
+        if pair_path is not None and not pair_path.is_file():
+            raise FileNotFoundError(f"ONNX 降噪对模型不存在: {pair_path}")
 
         try:
             import onnxruntime
@@ -95,12 +105,16 @@ class OnnxEngine(SuperResEngine):
             onnxruntime.GraphOptimizationLevel.ORT_ENABLE_ALL
         )
 
-        try:
-            session = onnxruntime.InferenceSession(
-                str(model.model_path),
+        def create_session(path: Path, active_providers):
+            return onnxruntime.InferenceSession(
+                str(path),
                 sess_options=session_options,
-                providers=providers,
+                providers=active_providers,
             )
+
+        active_providers = providers
+        try:
+            session = create_session(model_path, active_providers)
         except Exception as exc:
             # CUDA 机器上 fp16 组合可能失败（驱动/算子支持不足），先退回
             # fp32 的 CPU provider，保证至少能加载模型；DirectML 默认 fp32，
@@ -109,11 +123,12 @@ class OnnxEngine(SuperResEngine):
                 raise
             logger.warning("CUDA provider 加载失败，回退到 CPU fp32: %s", exc)
             self._precision = "fp32"
-            session = onnxruntime.InferenceSession(
-                str(model.model_path),
-                sess_options=session_options,
-                providers=["CPUExecutionProvider"],
-            )
+            active_providers = ["CPUExecutionProvider"]
+            session = create_session(model_path, active_providers)
+
+        pair_session = None
+        if pair_path is not None:
+            pair_session = create_session(pair_path, active_providers)
 
         self._session = session
         self._model = model
@@ -122,6 +137,47 @@ class OnnxEngine(SuperResEngine):
         self._input_name = self._resolve_io_name(model.input_name, session.get_inputs())
         self._output_name = self._resolve_io_name(model.output_name, session.get_outputs())
         self._output_channels = self._resolve_output_channels(session)
+        if pair_session is not None:
+            self._pair_session = pair_session
+            self._pair_input_name = self._resolve_io_name(
+                model.input_name, pair_session.get_inputs()
+            )
+            self._pair_output_name = self._resolve_io_name(
+                model.output_name, pair_session.get_outputs()
+            )
+            self._pair_output_channels = self._resolve_output_channels(pair_session)
+        else:
+            self._pair_session = None
+            self._pair_input_name = None
+            self._pair_output_name = None
+            self._pair_output_channels = None
+
+    @staticmethod
+    def _resolve_model_path(path: Path) -> Path:
+        path = Path(path)
+        if path.is_absolute():
+            return path
+        root_candidate = app_root() / path
+        if root_candidate.exists():
+            return root_candidate
+        return path
+
+    def _resolve_pair_path(self, model: ModelMeta) -> Optional[Path]:
+        if model.denoise_pair_path is None:
+            return None
+
+        raw = Path(model.denoise_pair_path)
+        if raw.is_absolute():
+            return raw
+
+        sibling = Path(model.model_path).parent / raw
+        if sibling.is_file():
+            return sibling
+
+        root_candidate = app_root() / raw
+        if root_candidate.is_file():
+            return root_candidate
+        return raw
 
     @staticmethod
     def _is_fp16_session(session) -> bool:
@@ -162,12 +218,13 @@ class OnnxEngine(SuperResEngine):
             return ["OpenVINOExecutionProvider", "CPUExecutionProvider"]
         return ["CPUExecutionProvider"]
 
-    def upscale_image(self, image, scale=4, progress_cb=None):
+    def upscale_image(self, image, scale=4, progress_cb=None, denoise_strength: float = 0.5):
         if self._session is None or self._model is None:
             raise RuntimeError("模型尚未加载，请先调用 load_model")
         if scale <= 0:
             raise ValueError("scale 必须为正整数")
 
+        denoise_strength = max(0.0, min(1.0, float(denoise_strength)))
         target_scale = int(self._model.scale or scale)
         tensor = preprocess_image(
             image,
@@ -178,7 +235,13 @@ class OnnxEngine(SuperResEngine):
 
         tile_size = int(self._model.tile_size or 512)
         try:
-            return self._upscale_tiled(tensor, target_scale, tile_size, progress_cb)
+            return self._upscale_tiled(
+                tensor,
+                target_scale,
+                tile_size,
+                progress_cb,
+                denoise_strength,
+            )
         except (MemoryError, RuntimeError) as exc:
             if tile_size <= 256 or not self._looks_like_oom(exc):
                 raise
@@ -187,7 +250,13 @@ class OnnxEngine(SuperResEngine):
                 tile_size,
                 exc,
             )
-            return self._upscale_tiled(tensor, target_scale, 256, progress_cb)
+            return self._upscale_tiled(
+                tensor,
+                target_scale,
+                256,
+                progress_cb,
+                denoise_strength,
+            )
 
     def _upscale_tiled(
         self,
@@ -195,6 +264,7 @@ class OnnxEngine(SuperResEngine):
         target_scale: int,
         tile_size: int,
         progress_cb: Optional[Callable[[ProgressInfo], None]],
+        denoise_strength: float,
     ) -> np.ndarray:
         _, channels, height, width = tensor.shape
         regions = tile_regions(height, width, tile_size=tile_size, overlap=10)
@@ -219,31 +289,30 @@ class OnnxEngine(SuperResEngine):
                 region.top : region.bottom,
                 region.left : region.right,
             ]
-            feeds = {
-                self._input_name: np.ascontiguousarray(
+            feeds = self._feeds_for_tile(self._input_name, tile, target_scale)
+            output = self._run_tile(self._session, self._output_name, feeds)
+            output = self._validate_output(output, region, target_scale, out_channels)
+
+            if self._pair_session is not None:
+                pair_feeds = self._feeds_for_tile(
+                    self._pair_input_name,
                     tile,
-                    dtype=self._inference_dtype(),
+                    target_scale,
                 )
-            }
-            self._add_control_inputs(feeds, target_scale)
-
-            output = self._session.run([self._output_name], feeds)[0]
-            output = np.asarray(output, dtype=np.float32)
-            if output.ndim == 3:
-                output = output[None, ...]
-            if output.ndim != 4:
-                raise ValueError(f"模型输出应为 NCHW，实际 shape={output.shape}")
-
-            expected_h = region.height * target_scale
-            expected_w = region.width * target_scale
-            if output.shape[2:] != (expected_h, expected_w):
-                raise ValueError(
-                    "模型输出尺寸与 tile 倍率不一致: "
-                    f"{output.shape[2:]} != {(expected_h, expected_w)}"
+                pair_output = self._run_tile(
+                    self._pair_session,
+                    self._pair_output_name,
+                    pair_feeds,
                 )
-            if output.shape[1] != out_channels:
-                raise ValueError(
-                    f"模型输出通道数不一致: {output.shape[1]} != {out_channels}"
+                pair_output = self._validate_output(
+                    pair_output,
+                    region,
+                    target_scale,
+                    out_channels,
+                )
+                output = (
+                    output * (1.0 - denoise_strength)
+                    + pair_output * denoise_strength
                 )
 
             out_top = region.top * target_scale
@@ -267,6 +336,54 @@ class OnnxEngine(SuperResEngine):
 
         averaged = accumulator / weights
         return postprocess_tensor(averaged)
+
+    def _feeds_for_tile(
+        self,
+        input_name: Optional[str],
+        tile: np.ndarray,
+        target_scale: int,
+    ) -> dict:
+        if input_name is None:
+            raise RuntimeError("模型输入名尚未解析")
+        feeds = {
+            input_name: np.ascontiguousarray(
+                tile,
+                dtype=self._inference_dtype(),
+            )
+        }
+        self._add_control_inputs(feeds, target_scale)
+        return feeds
+
+    def _run_tile(self, session, output_name: Optional[str], feeds: dict) -> np.ndarray:
+        if output_name is None:
+            raise RuntimeError("模型输出名尚未解析")
+        output = session.run([output_name], feeds)[0]
+        output = np.asarray(output, dtype=np.float32)
+        if output.ndim == 3:
+            output = output[None, ...]
+        if output.ndim != 4:
+            raise ValueError(f"模型输出应为 NCHW，实际 shape={output.shape}")
+        return output
+
+    def _validate_output(
+        self,
+        output: np.ndarray,
+        region,
+        target_scale: int,
+        out_channels: int,
+    ) -> np.ndarray:
+        expected_h = region.height * target_scale
+        expected_w = region.width * target_scale
+        if output.shape[2:] != (expected_h, expected_w):
+            raise ValueError(
+                "模型输出尺寸与 tile 倍率不一致: "
+                f"{output.shape[2:]} != {(expected_h, expected_w)}"
+            )
+        if output.shape[1] != out_channels:
+            raise ValueError(
+                f"模型输出通道数不一致: {output.shape[1]} != {out_channels}"
+            )
+        return output
 
     def _add_control_inputs(self, feeds: dict, target_scale: int) -> None:
         model = self._model
@@ -326,7 +443,7 @@ class VulkanEngine(SuperResEngine):
         self._ncnn_path = ncnn_path
         self._model_dir = model_dir
 
-    def upscale_image(self, image, scale=4, progress_cb=None):
+    def upscale_image(self, image, scale=4, progress_cb=None, denoise_strength: float = 0.5):
         if self._model is None or self._ncnn_path is None or self._model_dir is None:
             raise RuntimeError("模型尚未加载，请先调用 load_model")
         if scale not in (2, 3, 4):

@@ -30,6 +30,22 @@ class FakeSession:
         ]
 
 
+class FakeValueSession:
+    def __init__(self, scale, value):
+        self.scale = scale
+        self.value = float(value)
+
+    def run(self, output_names, feeds):
+        tile = feeds["input"]
+        shape = (
+            tile.shape[0],
+            tile.shape[1],
+            tile.shape[2] * self.scale,
+            tile.shape[3] * self.scale,
+        )
+        return [np.full(shape, self.value, dtype=np.float32)]
+
+
 def make_model(
     scale=2,
     tile_size=256,
@@ -57,6 +73,18 @@ def make_engine(fake_session, model):
     engine._input_name = "input"
     engine._output_name = "output"
     engine._output_channels = 3
+    return engine
+
+
+def make_paired_engine(weak_value=0.2, strong_value=0.6):
+    model = make_model(scale=2)
+    weak_session = FakeValueSession(scale=2, value=weak_value)
+    strong_session = FakeValueSession(scale=2, value=strong_value)
+    engine = make_engine(weak_session, model)
+    engine._pair_session = strong_session
+    engine._pair_input_name = "input"
+    engine._pair_output_name = "output"
+    engine._pair_output_channels = 3
     return engine
 
 
@@ -149,3 +177,25 @@ def test_oom_during_large_tile_falls_back_to_256():
     assert session.calls == 5
     widths = [feed["input"].shape[3] for feed in session.feeds]
     assert widths == [300, 256, 54, 256, 54]
+
+
+def test_denoise_strength_interpolates_between_weak_and_strong_outputs():
+    image = np.full((2, 2, 3), 51, dtype=np.uint8)
+
+    weak = make_paired_engine().upscale_image(image, scale=2, denoise_strength=0.0)
+    strong = make_paired_engine().upscale_image(image, scale=2, denoise_strength=1.0)
+    balanced = make_paired_engine().upscale_image(image, scale=2, denoise_strength=0.5)
+
+    np.testing.assert_array_equal(weak, np.full_like(weak, 51))
+    np.testing.assert_array_equal(strong, np.full_like(strong, 153))
+    np.testing.assert_array_equal(balanced, np.full_like(balanced, 102))
+
+
+def test_denoise_strength_is_ignored_without_pair_session():
+    image = np.full((2, 2, 3), 51, dtype=np.uint8)
+    model = make_model(scale=2)
+    engine = make_engine(FakeValueSession(scale=2, value=0.2), model)
+
+    output = engine.upscale_image(image, scale=2, denoise_strength=1.0)
+
+    np.testing.assert_array_equal(output, np.full_like(output, 51))

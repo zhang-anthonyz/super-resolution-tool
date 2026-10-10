@@ -21,9 +21,11 @@ class NearestEngine:
         self.backend = backend
         self.cancelled = cancelled
         self.calls = 0
+        self.denoise_strengths = []
 
-    def upscale_image(self, image, scale=4, progress_cb=None):
+    def upscale_image(self, image, scale=4, progress_cb=None, denoise_strength=0.5):
         self.calls += 1
+        self.denoise_strengths.append(denoise_strength)
         if self.cancelled:
             raise SuperResCancelled()
         return np.repeat(np.repeat(image, scale, axis=0), scale, axis=1)
@@ -115,6 +117,7 @@ def test_upscale_video_uses_rawvideo_pipes_and_reports_frames(tmp_path, monkeypa
     assert result.output_path == output_path
     assert output_path.is_file()
     assert engine.calls == 2
+    assert engine.denoise_strengths == [0.5, 0.5]
     assert progress == [(0, 2), (1, 2), (2, 2)]
     output_info = probe_video(output_path)
     assert (output_info["width"], output_info["height"]) == (64, 64)

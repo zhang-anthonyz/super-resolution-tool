@@ -173,6 +173,7 @@ def _encode_video(
     total_frames: int,
     progress_cb: Optional[Callable[[ProgressInfo], None]],
     cancel_flag: Any,
+    denoise_strength: float = 0.5,
 ) -> None:
     out_width, out_height = output_dimensions(width, height, scale)
     frame_size = width * height * 3
@@ -247,7 +248,11 @@ def _encode_video(
                 )
 
             frame = np.frombuffer(raw_frame, dtype=np.uint8).reshape((height, width, 3))
-            upscaled = engine.upscale_image(frame, scale)
+            upscaled = engine.upscale_image(
+                frame,
+                scale,
+                denoise_strength=denoise_strength,
+            )
             upscaled = np.asarray(upscaled)
             if upscaled.dtype != np.uint8:
                 raise RuntimeError("Upscale engine must return an uint8 RGB frame")
@@ -361,6 +366,7 @@ def upscale_video(
     codec: VideoCodec = VideoCodec.H264,
     progress_cb: Optional[Callable[[ProgressInfo], None]] = None,
     cancel_flag: Any = None,
+    denoise_strength: float = 0.5,
 ) -> SuperResResult:
     """Upscale a single video frame by frame.
 
@@ -419,6 +425,7 @@ def upscale_video(
                     total_frames=total_frames,
                     progress_cb=progress_cb,
                     cancel_flag=cancel_flag,
+                    denoise_strength=denoise_strength,
                 )
             except _EncoderError:
                 if encoder == fallback:
@@ -442,6 +449,7 @@ def upscale_video(
                     total_frames=total_frames,
                     progress_cb=progress_cb,
                     cancel_flag=cancel_flag,
+                    denoise_strength=denoise_strength,
                 )
 
             if info["has_audio"]:

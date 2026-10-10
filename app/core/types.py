@@ -80,6 +80,7 @@ class ModelMeta:
     scene: Scene                       # 适用场景
     backend: Backend                   # 可用后端（Anime4K 仅 VULKAN/CPU）
     model_path: Path                   # 模型路径（.onnx 或 ncnn .param/.bin 目录）
+    denoise_pair_path: Optional[Path] = None  # 输出插值降噪对路径（ONNX 后端使用）
     input_name: str = "input"
     output_name: str = "output"
     scale_input: Optional[str] = None       # SRMD 的 "scale"

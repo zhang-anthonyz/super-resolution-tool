@@ -12,7 +12,6 @@ from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
     QFormLayout,
-    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -33,17 +32,15 @@ from PySide6.QtWidgets import (
 from ..core.backend_selector import BackendSelector
 from ..core.environment_checker import available_backends
 from ..core.types import (
-    Backend,
     GpuInfo,
-    ModelMeta,
     ProgressInfo,
-    Scene,
     SuperResResult,
     VideoCodec,
 )
 from . import ui_logic
 from . import theme
 from .ui_logic import BackendChoice
+from .model_selector import ModelSelector
 from .workers import ImageUpscaleWorker, VideoUpscaleWorker
 
 
@@ -168,7 +165,6 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(860, 640)
         self._build_ui()
         self._connect_signals()
-        self._refresh_model_for_scene()
         self._apply_style()
 
     def _build_ui(self) -> None:
@@ -205,35 +201,16 @@ class MainWindow(QMainWindow):
         gpu_layout.addWidget(self.gpu_detail_label)
         layout.addWidget(gpu_group)
 
-        config_group = QGroupBox("超分配置")
-        form = QFormLayout(config_group)
-        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
-
-        self.model_combo = QComboBox()
-        for name, display in ui_logic.model_options():
-            self.model_combo.addItem(f"{name} · {display}", name)
-        self.model_combo.addItem("自定义模型", None)
-
-        model_row = QWidget()
-        model_layout = QHBoxLayout(model_row)
-        model_layout.setContentsMargins(0, 0, 0, 0)
-        self.model_path_edit = QLineEdit()
-        self.model_browse_button = QPushButton("浏览")
-        self.model_browse_button.clicked.connect(self._browse_model)
-        model_layout.addWidget(self.model_path_edit, 1)
-        model_layout.addWidget(self.model_browse_button)
-
-        self.backend_combo = QComboBox()
-        self._populate_backend_combo()
-
-        self.model_info_label = QLabel()
-        self.model_info_label.setObjectName("mutedLabel")
-
-        form.addRow("超分模型", self.model_combo)
-        form.addRow("模型文件", model_row)
-        form.addRow("推理后端", self.backend_combo)
-        form.addRow("", self.model_info_label)
-        layout.addWidget(config_group)
+        import_group = QGroupBox("自定义模型导入")
+        import_layout = QVBoxLayout(import_group)
+        self.import_model_button = QPushButton("导入 ONNX 模型到模型库")
+        self.import_model_button.clicked.connect(self._import_custom_model)
+        self.import_model_status = QLabel("可导入自定义 ONNX 模型，随后在各任务 Tab 中选择“自定义模型”")
+        self.import_model_status.setObjectName("mutedLabel")
+        self.import_model_status.setWordWrap(True)
+        import_layout.addWidget(self.import_model_button)
+        import_layout.addWidget(self.import_model_status)
+        layout.addWidget(import_group)
         layout.addStretch(1)
         return page
 
@@ -262,6 +239,17 @@ class MainWindow(QMainWindow):
         input_layout.addLayout(input_buttons)
         layout.addWidget(input_group, 2)
 
+        self.image_scale_selector = ScaleSelector()
+        model_group = QGroupBox("超分模型")
+        model_layout = QVBoxLayout(model_group)
+        self.image_model_selector = ModelSelector(
+            self.backend_options,
+            parent=page,
+            scale_selector=self.image_scale_selector,
+        )
+        model_layout.addWidget(self.image_model_selector)
+        layout.addWidget(model_group)
+
         output_group = QGroupBox("输出与倍率")
         output_form = QFormLayout(output_group)
         output_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
@@ -273,7 +261,6 @@ class MainWindow(QMainWindow):
         self.image_output_button = QPushButton("浏览")
         self.image_output_button.clicked.connect(self._browse_image_output)
         output_layout.addWidget(self.image_output_button)
-        self.image_scale_selector = ScaleSelector()
         self.image_overwrite_check = QCheckBox("覆盖已存在文件")
         output_form.addRow("输出目录", output_row)
         output_form.addRow("倍率", self.image_scale_selector)
@@ -340,13 +327,23 @@ class MainWindow(QMainWindow):
         input_form.addRow("", self.video_8bit_label)
         layout.addWidget(input_group)
 
+        self.video_scale_selector = ScaleSelector()
+        model_group = QGroupBox("超分模型")
+        model_layout = QVBoxLayout(model_group)
+        self.video_model_selector = ModelSelector(
+            self.backend_options,
+            parent=page,
+            scale_selector=self.video_scale_selector,
+        )
+        model_layout.addWidget(self.video_model_selector)
+        layout.addWidget(model_group)
+
         output_group = QGroupBox("输出与倍率")
         output_form = QFormLayout(output_group)
         output_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
         self.video_codec_combo = QComboBox()
         for codec, label in VIDEO_CODEC_OPTIONS:
             self.video_codec_combo.addItem(label, codec)
-        self.video_scale_selector = ScaleSelector()
         self.video_overwrite_check = QCheckBox("覆盖已存在文件")
         output_form.addRow("编码器", self.video_codec_combo)
         output_form.addRow("倍率", self.video_scale_selector)
@@ -378,87 +375,10 @@ class MainWindow(QMainWindow):
         return page
 
     def _connect_signals(self) -> None:
-        self.model_combo.currentIndexChanged.connect(self._refresh_model_for_scene)
         self.image_start_button.clicked.connect(self.start_image_upscale)
         self.image_cancel_button.clicked.connect(self.cancel_image_upscale)
         self.video_start_button.clicked.connect(self.start_video_upscale)
         self.video_cancel_button.clicked.connect(self.cancel_video_upscale)
-
-    def _populate_backend_combo(self) -> None:
-        self.backend_combo.clear()
-        for choice in self.backend_options:
-            self.backend_combo.addItem(choice.display_label, choice.backend)
-            if not choice.available:
-                index = self.backend_combo.count() - 1
-                item = self.backend_combo.model().item(index)
-                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEnabled)
-        recommended = ui_logic.recommended_backend_index(self.backend_options)
-        self.backend_combo.setCurrentIndex(recommended)
-
-    def _refresh_model_for_scene(self, *_args: object) -> None:
-        model = self._selected_registry_model()
-        if model is not None:
-            path = ui_logic.resolve_project_path(model.model_path)
-            self.model_path_edit.setText(str(path))
-            scales = ui_logic.model_scales(model)
-            self.image_scale_selector.set_scales(scales)
-            self.video_scale_selector.set_scales(scales)
-        self._update_model_info()
-
-    def _update_model_info(self) -> None:
-        model = self.current_model()
-        registry_model = self._selected_registry_model()
-        description = (
-            registry_model.description
-            if registry_model is not None
-            else model.description
-        )
-        scale_text = f"{model.scale}x" if model.scale else "自动"
-        self.model_info_label.setText(
-            f"当前模型：{model.name} / 固定倍率：{scale_text} / {description}"
-        )
-
-    def _selected_model_name(self) -> Optional[str]:
-        value = self.model_combo.currentData()
-        return str(value) if value else None
-
-    def _selected_registry_model(self) -> Optional[ModelMeta]:
-        name = self._selected_model_name()
-        if name is None:
-            return None
-        return ui_logic.model_for_name(name)
-
-    def current_model(self) -> ModelMeta:
-        registry_model = self._selected_registry_model()
-        if registry_model is not None:
-            path = ui_logic.resolve_project_path(registry_model.model_path)
-            return ui_logic.build_model_meta(
-                path,
-                registry_model.scene,
-                self.current_backend(),
-                registry_model.scale,
-            )
-
-        path = self._current_model_path()
-        return ui_logic.build_model_meta(
-            path,
-            self.current_scene(),
-            self.current_backend(),
-            ui_logic.fixed_scale_for_model(path),
-        )
-
-    def current_scene(self) -> Scene:
-        registry_model = self._selected_registry_model()
-        return registry_model.scene if registry_model is not None else Scene.REALISTIC
-
-    def current_backend(self) -> Backend:
-        backend = self.backend_combo.currentData()
-        if isinstance(backend, Backend):
-            return backend
-        try:
-            return Backend(str(backend).lower())
-        except (TypeError, ValueError):
-            return self.backend_selector.default_backend()
 
     def current_video_codec(self) -> VideoCodec:
         codec = self.video_codec_combo.currentData()
@@ -469,11 +389,7 @@ class MainWindow(QMainWindow):
         except (TypeError, ValueError):
             return VideoCodec.H264
 
-    def _current_model_path(self) -> Path:
-        text = self.model_path_edit.text().strip()
-        return ui_logic.resolve_project_path(text) if text else ui_logic.app_root()
-
-    def _browse_model(self) -> None:
+    def _import_custom_model(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
             self,
             "选择 ONNX 模型",
@@ -485,11 +401,7 @@ class MainWindow(QMainWindow):
             selected_path = Path(path)
             if selected_path.resolve().parent != library_dir.resolve():
                 selected_path = ui_logic.copy_model_to_library(selected_path)
-            self.model_path_edit.setText(str(selected_path))
-            custom_index = self.model_combo.findData(None)
-            if custom_index >= 0:
-                self.model_combo.setCurrentIndex(custom_index)
-            self._update_model_info()
+            self.import_model_status.setText(f"已导入：{selected_path}")
 
     def _add_image_files(self) -> None:
         paths, _ = QFileDialog.getOpenFileNames(
@@ -577,15 +489,16 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "缺少输出目录", "请选择图片输出目录")
             return
 
-        model_path = self._current_model_path()
+        model_path = self.image_model_selector.current_model_path()
         if not model_path.is_file():
             QMessageBox.warning(self, "模型不存在", f"未找到模型文件：\n{model_path}")
             return
 
         requested_scale = self.image_scale_selector.scale()
         scale, scale_changed = ui_logic.effective_scale(model_path, requested_scale)
-        model = self.current_model()
-        backend = self.current_backend()
+        model = self.image_model_selector.current_model()
+        backend = self.image_model_selector.current_backend()
+        denoise_strength = self.image_model_selector.denoise_strength()
         out_dir = ui_logic.resolve_project_path(out_dir_text)
         self._reset_image_progress()
 
@@ -606,6 +519,7 @@ class MainWindow(QMainWindow):
             scale=scale,
             backend=backend,
             overwrite=self.image_overwrite_check.isChecked(),
+            denoise_strength=denoise_strength,
             parent=self,
         )
         worker.progress.connect(self._on_image_progress)
@@ -640,7 +554,7 @@ class MainWindow(QMainWindow):
         out_dir = ui_logic.resolve_project_path(out_dir_text)
         out_dir.mkdir(parents=True, exist_ok=True)
 
-        model_path = self._current_model_path()
+        model_path = self.video_model_selector.current_model_path()
         if not model_path.is_file():
             QMessageBox.warning(self, "模型不存在", f"未找到模型文件：\n{model_path}")
             return
@@ -648,7 +562,8 @@ class MainWindow(QMainWindow):
         requested_scale = self.video_scale_selector.scale()
         scale, scale_changed = ui_logic.effective_scale(model_path, requested_scale)
         codec = self.current_video_codec()
-        backend = self.current_backend()
+        backend = self.video_model_selector.current_backend()
+        denoise_strength = self.video_model_selector.denoise_strength()
         out_path = out_dir / f"{input_path.stem}_x{scale}.mp4"
 
         if out_path.exists() and not self.video_overwrite_check.isChecked():
@@ -659,7 +574,7 @@ class MainWindow(QMainWindow):
             )
             return
 
-        model = self.current_model()
+        model = self.video_model_selector.current_model()
         self._reset_video_progress()
         self.video_log.append(
             "Info",
@@ -679,6 +594,7 @@ class MainWindow(QMainWindow):
             scale=scale,
             backend=backend,
             codec=codec,
+            denoise_strength=denoise_strength,
             parent=self,
         )
         worker.progress.connect(self._on_video_progress)

@@ -14,7 +14,6 @@ from ..core.types import Backend, ModelMeta, Scene
 
 _MODEL_NAMES = (
     "realesr-general-x4v3",
-    "realesr-general-wdn-x4v3",
     "RealESRGAN_x2plus",
     "RealESRGAN_x4plus_anime_6B",
     "RealESRGAN_x4plus_fp16",
@@ -22,7 +21,6 @@ _MODEL_NAMES = (
 
 _MODEL_SCALES = {
     "realesr-general-x4v3": 4,
-    "realesr-general-wdn-x4v3": 4,
     "RealESRGAN_x2plus": 2,
     "RealESRGAN_x4plus_anime_6B": 4,
     "RealESRGAN_x4plus_fp16": 4,
@@ -67,29 +65,34 @@ def builtin_models() -> list[ModelMeta]:
     """Return the V1 built-in fp16 model registry."""
     scene_by_name = {
         "realesr-general-x4v3": Scene.REALISTIC,
-        "realesr-general-wdn-x4v3": Scene.REALISTIC,
         "RealESRGAN_x2plus": Scene.REALISTIC,
         "RealESRGAN_x4plus_anime_6B": Scene.ANIME_2D,
         "RealESRGAN_x4plus_fp16": Scene.REALISTIC,
     }
-    return [
-        ModelMeta(
-            name=name,
-            scale=_MODEL_SCALES[name],
-            scene=scene_by_name[name],
-            backend=Backend.DIRECTML,
-            model_path=_MODEL_PATHS[name],
-            input_name="input",
-            output_name="output",
-            scale_input=None,
-            denoise_input=None,
-            channel_order="RGB",
-            normalize=(0.0, 1.0),
-            tile_size=512,
-            description=_MODEL_DESCRIPTIONS[name],
+    denoise_pair_by_name = {
+        "realesr-general-x4v3": _MODEL_PATHS["realesr-general-wdn-x4v3"],
+    }
+    models: list[ModelMeta] = []
+    for name in _MODEL_NAMES:
+        models.append(
+            ModelMeta(
+                name=name,
+                scale=_MODEL_SCALES[name],
+                scene=scene_by_name[name],
+                backend=Backend.DIRECTML,
+                model_path=_MODEL_PATHS[name],
+                denoise_pair_path=denoise_pair_by_name.get(name),
+                input_name="input",
+                output_name="output",
+                scale_input=None,
+                denoise_input=None,
+                channel_order="RGB",
+                normalize=(0.0, 1.0),
+                tile_size=512,
+                description=_MODEL_DESCRIPTIONS[name],
+            )
         )
-        for name in _MODEL_NAMES
-    ]
+    return models
 
 
 def scene_default(scene: Scene) -> ModelMeta:

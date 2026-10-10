@@ -43,6 +43,7 @@ class ImageUpscaleWorker(QThread):
         scale: int,
         backend: Backend,
         overwrite: bool = False,
+        denoise_strength: float = 0.5,
         parent: Any = None,
     ) -> None:
         super().__init__(parent)
@@ -52,6 +53,7 @@ class ImageUpscaleWorker(QThread):
         self._scale = int(scale)
         self._backend = backend
         self._overwrite = bool(overwrite)
+        self._denoise_strength = float(denoise_strength)
         self._cancel_event = threading.Event()
         self._engine: OnnxEngine | VulkanEngine | None = None
 
@@ -72,6 +74,7 @@ class ImageUpscaleWorker(QThread):
                 progress_cb=self.progress.emit,
                 cancel_flag=self._cancel_event,
                 overwrite=self._overwrite,
+                denoise_strength=self._denoise_strength,
             )
             self.finished.emit(results)
         except SuperResCancelled:
@@ -96,6 +99,7 @@ class VideoUpscaleWorker(QThread):
         scale: int,
         backend: Backend,
         codec: VideoCodec,
+        denoise_strength: float = 0.5,
         parent: Any = None,
     ) -> None:
         super().__init__(parent)
@@ -105,6 +109,7 @@ class VideoUpscaleWorker(QThread):
         self._scale = int(scale)
         self._backend = backend
         self._codec = codec
+        self._denoise_strength = float(denoise_strength)
         self._cancel_event = threading.Event()
         self._engine: OnnxEngine | VulkanEngine | None = None
 
@@ -125,6 +130,7 @@ class VideoUpscaleWorker(QThread):
                 codec=self._codec,
                 progress_cb=self.progress.emit,
                 cancel_flag=self._cancel_event,
+                denoise_strength=self._denoise_strength,
             )
             if result.ok:
                 self.finished.emit(result)

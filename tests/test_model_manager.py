@@ -14,17 +14,19 @@ from app.core.types import Backend, ModelMeta, Scene
 def test_builtin_models_contains_real_esrgan_x4plus():
     models = builtin_models()
 
-    assert len(models) == 5
+    assert len(models) == 4
     by_name = {model.name: model for model in models}
     assert set(by_name) == {
         "realesr-general-x4v3",
-        "realesr-general-wdn-x4v3",
         "RealESRGAN_x2plus",
         "RealESRGAN_x4plus_anime_6B",
         "RealESRGAN_x4plus_fp16",
     }
 
     assert by_name["RealESRGAN_x2plus"].scale == 2
+    assert by_name["realesr-general-x4v3"].denoise_pair_path == Path(
+        "models/onnx/realesr-general-wdn-x4v3.onnx"
+    )
     for model in models:
         assert model.scale in {2, 4}
         assert model.backend == Backend.DIRECTML

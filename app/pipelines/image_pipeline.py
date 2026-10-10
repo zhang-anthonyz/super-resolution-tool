@@ -44,6 +44,7 @@ def upscale_single(
     out_path: str | Path,
     engine: Any,
     scale: int,
+    denoise_strength: float = 0.5,
 ) -> SuperResResult:
     """Upscale one image and return a result object."""
     image_path = Path(image_path)
@@ -56,7 +57,11 @@ def upscale_single(
 
         with Image.open(image_path) as source:
             image = np.asarray(source.convert("RGB"))
-        upscaled = engine.upscale_image(image, scale)
+        upscaled = engine.upscale_image(
+            image,
+            scale,
+            denoise_strength=denoise_strength,
+        )
         _save_image(upscaled, out_path)
         return SuperResResult(
             ok=True,
@@ -139,6 +144,7 @@ def upscale_batch(
     progress_cb: Optional[Callable[[ProgressInfo], None]] = None,
     cancel_flag: Any = None,
     overwrite: bool = False,
+    denoise_strength: float = 0.5,
 ) -> list[SuperResResult]:
     """Upscale supported files recursively and return one result per input."""
     out_dir = Path(out_dir)
@@ -164,7 +170,13 @@ def upscale_batch(
             _report_progress(progress_cb, index, total, source, skipped=True)
             continue
 
-        result = upscale_single(source, out_path, engine, scale)
+        result = upscale_single(
+            source,
+            out_path,
+            engine,
+            scale,
+            denoise_strength=denoise_strength,
+        )
         results.append(result)
         _report_progress(progress_cb, index, total, source)
 

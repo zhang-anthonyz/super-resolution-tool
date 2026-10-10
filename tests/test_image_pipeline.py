@@ -18,9 +18,11 @@ class _NearestEngine:
         self.fail_on_call = set(fail_on_call or [])
         self.cancelled = False
         self.calls = 0
+        self.denoise_strengths = []
 
-    def upscale_image(self, image, scale=4, progress_cb=None):
+    def upscale_image(self, image, scale=4, progress_cb=None, denoise_strength=0.5):
         self.calls += 1
+        self.denoise_strengths.append(denoise_strength)
         if self.calls in self.fail_on_call:
             raise RuntimeError("synthetic failure")
         return np.repeat(np.repeat(image, scale, axis=0), scale, axis=1)
@@ -59,6 +61,24 @@ def test_upscale_single_captures_open_failure(tmp_path):
     assert result.ok is False
     assert result.output_path is None
     assert result.error
+
+
+def test_upscale_single_passes_denoise_strength(tmp_path):
+    source = tmp_path / "input.png"
+    output = tmp_path / "output.png"
+    _write_image(source, size=(2, 2))
+    engine = _NearestEngine()
+
+    result = upscale_single(
+        source,
+        output,
+        engine,
+        scale=2,
+        denoise_strength=0.25,
+    )
+
+    assert result.ok is True
+    assert engine.denoise_strengths == [0.25]
 
 
 def test_upscale_batch_filters_extensions_and_names_outputs(tmp_path):
