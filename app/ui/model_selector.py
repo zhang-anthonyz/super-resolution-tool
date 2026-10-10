@@ -40,6 +40,12 @@ def is_denoise_model(model: Optional[ModelMeta]) -> bool:
     return model is not None and model.denoise_pair_path is not None
 
 
+def _model_supports_vulkan(name: str) -> bool:
+    """ncnn 仅内置 x4plus / anime 系列模型（无 x2plus / general）。"""
+    lowered = name.lower()
+    return "x4plus" in lowered or "anime" in lowered
+
+
 class ModelSelector(QWidget):
     """Independent model selection controls used by image and video tabs."""
 
@@ -116,9 +122,10 @@ class ModelSelector(QWidget):
         layout.addLayout(form)
 
         self.model_combo.currentIndexChanged.connect(self._on_model_changed)
-        self.backend_combo.currentIndexChanged.connect(self._update_model_info)
+        self.backend_combo.currentIndexChanged.connect(self._on_backend_changed)
         self.denoise_slider.valueChanged.connect(self._on_denoise_changed)
 
+        self._on_backend_changed()
         self._on_model_changed()
 
     def set_scale_selector(self, scale_selector: Optional[QWidget]) -> None:
@@ -154,6 +161,29 @@ class ModelSelector(QWidget):
         set_scales = getattr(self._scale_selector, "set_scales", None)
         if callable(set_scales):
             set_scales(model_scales(model))
+
+    def _on_backend_changed(self) -> None:
+        """Vulkan 后端禁用 ncnn 无对应模型（x2plus / general），并自动切到可用项。"""
+        backend = self.current_backend()
+        first_enabled = -1
+        for i in range(self.model_combo.count()):
+            name = self.model_combo.itemData(i)
+            if name is None:
+                continue
+            item = self.model_combo.model().item(i)
+            supported = backend != Backend.VULKAN or _model_supports_vulkan(str(name))
+            if supported:
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEnabled)
+                if first_enabled < 0:
+                    first_enabled = i
+            else:
+                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEnabled)
+        current = self.model_combo.currentIndex()
+        current_item = self.model_combo.model().item(current)
+        if current_item is not None and not (current_item.flags() & Qt.ItemFlag.ItemIsEnabled):
+            if first_enabled >= 0:
+                self.model_combo.setCurrentIndex(first_enabled)
+        self._update_model_info()
 
     def _on_denoise_changed(self, value: int) -> None:
         strength = value / 100.0

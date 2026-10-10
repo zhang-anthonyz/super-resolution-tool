@@ -423,13 +423,15 @@ class VulkanEngine(SuperResEngine):
         name = model.name
         lowered = name.lower()
 
-        if name == "RealESRGAN_x4plus":
-            return "realesrgan-x4plus"
-        if name == "RealESRGAN_x4plus_anime_6B":
-            return "realesrgan-x4plus-anime"
         if "animevideov3" in lowered:
             return f"realesr-animevideov3-x{int(scale)}"
-        return Path(name).stem
+        if "anime" in lowered:
+            return "realesrgan-x4plus-anime"
+        if "x4plus" in lowered:
+            return "realesrgan-x4plus"
+        raise ValueError(
+            f"Vulkan 后端不支持模型「{name}」（ncnn 无对应模型），请切换 DirectML 后端"
+        )
 
     def load_model(self, model: ModelMeta) -> None:
         ncnn_path = app_root() / "vendor" / "realesrgan-ncnn-vulkan.exe"
@@ -478,7 +480,7 @@ class VulkanEngine(SuperResEngine):
                 "-o",
                 str(output_path),
                 "-m",
-                str(self._model_dir),
+                self._model_dir.name,
                 "-n",
                 ncnn_model,
                 "-s",
@@ -491,6 +493,7 @@ class VulkanEngine(SuperResEngine):
                     capture_output=True,
                     text=True,
                     creationflags=creationflags,
+                    cwd=str(self._ncnn_path.parent),
                     check=False,
                 )
             except OSError as exc:

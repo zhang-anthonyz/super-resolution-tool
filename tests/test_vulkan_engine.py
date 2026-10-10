@@ -40,7 +40,8 @@ def test_ncnn_model_name_mapping():
     assert VulkanEngine._ncnn_model_name(make_model("animevideov3"), 3) == (
         "realesr-animevideov3-x3"
     )
-    assert VulkanEngine._ncnn_model_name(make_model("custom-model"), 4) == "custom-model"
+    with pytest.raises(ValueError):
+        VulkanEngine._ncnn_model_name(make_model("custom-model"), 4)
 
 
 def test_load_model_records_ncnn_paths(tmp_path, monkeypatch):
