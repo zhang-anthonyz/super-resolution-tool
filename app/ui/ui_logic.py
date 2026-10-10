@@ -10,10 +10,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Optional, Sequence
 
+from ..core.paths import app_root
 from ..core.types import Backend, GpuInfo, GpuVendor, ModelMeta, Scene
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_MODEL_RELATIVE_PATH = Path("models/onnx/RealESRGAN_x4plus.onnx")
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 VIDEO_EXTENSIONS = {".mp4", ".mkv", ".mov", ".avi", ".webm", ".m4v"}
@@ -70,10 +70,10 @@ class BackendChoice:
 
 
 def resolve_project_path(path: str | Path) -> Path:
-    """Resolve a relative path against the project root."""
+    """Resolve a relative path against the application root."""
     path = Path(path).expanduser()
     if not path.is_absolute():
-        path = PROJECT_ROOT / path
+        path = app_root() / path
     return path
 
 
@@ -90,7 +90,7 @@ def default_model_name(scene: Scene) -> str:
 def default_model_path(scene: Scene) -> Path:
     """Return the currently registered default model for a scene preset."""
     default_model_name(scene)
-    return DEFAULT_MODEL_RELATIVE_PATH
+    return app_root() / DEFAULT_MODEL_RELATIVE_PATH
 
 
 def fixed_scale_for_model(model_path: str | Path) -> Optional[int]:

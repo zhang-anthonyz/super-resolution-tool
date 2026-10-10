@@ -253,7 +253,7 @@ class MainWindow(QMainWindow):
         output_group = QGroupBox("输出与倍率")
         output_form = QFormLayout(output_group)
         output_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
-        self.image_output_dir_edit = QLineEdit(str(ui_logic.PROJECT_ROOT / "output"))
+        self.image_output_dir_edit = QLineEdit(str(ui_logic.app_root() / "output"))
         output_row = QWidget()
         output_layout = QHBoxLayout(output_row)
         output_layout.setContentsMargins(0, 0, 0, 0)
@@ -309,7 +309,7 @@ class MainWindow(QMainWindow):
         self.video_input_button.clicked.connect(self._browse_video_input)
         video_input_layout.addWidget(self.video_input_button)
 
-        self.video_output_dir_edit = QLineEdit(str(ui_logic.PROJECT_ROOT / "output"))
+        self.video_output_dir_edit = QLineEdit(str(ui_logic.app_root() / "output"))
         video_output_row = QWidget()
         video_output_layout = QHBoxLayout(video_output_row)
         video_output_layout.setContentsMargins(0, 0, 0, 0)
@@ -426,13 +426,13 @@ class MainWindow(QMainWindow):
 
     def _current_model_path(self) -> Path:
         text = self.model_path_edit.text().strip()
-        return ui_logic.resolve_project_path(text) if text else ui_logic.PROJECT_ROOT
+        return ui_logic.resolve_project_path(text) if text else ui_logic.app_root()
 
     def _browse_model(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
             self,
             "选择 ONNX 模型",
-            str(ui_logic.PROJECT_ROOT / "models" / "onnx"),
+            str(ui_logic.app_root() / "models" / "onnx"),
             "ONNX 模型 (*.onnx);;所有文件 (*)",
         )
         if path:

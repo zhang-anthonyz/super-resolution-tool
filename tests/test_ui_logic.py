@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from app.core.paths import app_root
 from app.core.types import Backend, GpuInfo, GpuType, GpuVendor, Scene
 from app.ui.ui_logic import (
     DEFAULT_MODEL_RELATIVE_PATH,
@@ -34,7 +35,7 @@ def make_gpu(
 
 @pytest.mark.parametrize("scene", list(Scene))
 def test_scene_default_model_mapping(scene):
-    assert default_model_path(scene) == DEFAULT_MODEL_RELATIVE_PATH
+    assert default_model_path(scene) == app_root() / DEFAULT_MODEL_RELATIVE_PATH
 
     meta = build_model_meta(default_model_path(scene), scene, Backend.DIRECTML)
     assert meta.name == "RealESRGAN_x4plus"
