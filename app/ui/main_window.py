@@ -247,15 +247,12 @@ class MainWindow(QMainWindow):
         layout.addWidget(input_group, 2)
 
         self.image_scale_selector = ScaleSelector()
-        model_group = QGroupBox("超分模型")
-        model_layout = QVBoxLayout(model_group)
         self.image_model_selector = ModelSelector(
             self.backend_options,
             parent=page,
             scale_selector=self.image_scale_selector,
         )
-        model_layout.addWidget(self.image_model_selector)
-        layout.addWidget(model_group)
+        layout.addWidget(self.image_model_selector)
 
         output_group = QGroupBox("输出与倍率")
         output_form = QFormLayout(output_group)
@@ -335,15 +332,12 @@ class MainWindow(QMainWindow):
         layout.addWidget(input_group)
 
         self.video_scale_selector = ScaleSelector()
-        model_group = QGroupBox("超分模型")
-        model_layout = QVBoxLayout(model_group)
         self.video_model_selector = ModelSelector(
             self.backend_options,
             parent=page,
             scale_selector=self.video_scale_selector,
         )
-        model_layout.addWidget(self.video_model_selector)
-        layout.addWidget(model_group)
+        layout.addWidget(self.video_model_selector)
 
         output_group = QGroupBox("输出与倍率")
         output_form = QFormLayout(output_group)
