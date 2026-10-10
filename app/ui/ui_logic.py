@@ -5,6 +5,7 @@ can be unit tested without a QApplication or an offscreen platform.
 """
 from __future__ import annotations
 
+import math
 import shutil
 from dataclasses import dataclass
 from datetime import datetime
@@ -282,6 +283,11 @@ def is_8bit_sdr(bit_depth: int, is_hdr: bool) -> bool:
 
 def video_8bit_notice() -> str:
     return "仅支持 8bit SDR 视频，10bit/HDR 暂不支持"
+
+
+def progress_bar_value(current: float) -> int:
+    """Round a possibly fractional progress value for a QProgressBar."""
+    return int(math.floor(float(current) + 0.5))
 
 
 def format_log_line(

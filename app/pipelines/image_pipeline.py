@@ -45,6 +45,7 @@ def upscale_single(
     engine: Any,
     scale: int,
     denoise_strength: float = 0.5,
+    progress_cb: Optional[Callable[[ProgressInfo], None]] = None,
 ) -> SuperResResult:
     """Upscale one image and return a result object."""
     image_path = Path(image_path)
@@ -61,12 +62,14 @@ def upscale_single(
             image,
             scale,
             denoise_strength=denoise_strength,
+            progress_cb=progress_cb,
         )
         _save_image(upscaled, out_path)
         return SuperResResult(
             ok=True,
             output_path=out_path,
             elapsed_seconds=time.perf_counter() - started,
+            input_path=image_path,
         )
     except SuperResCancelled:
         raise
@@ -75,6 +78,7 @@ def upscale_single(
             ok=False,
             error=str(exc),
             elapsed_seconds=time.perf_counter() - started,
+            input_path=image_path,
         )
 
 
@@ -115,7 +119,7 @@ def _should_cancel(cancel_flag: Any) -> bool:
 
 def _report_progress(
     progress_cb: Optional[Callable[[ProgressInfo], None]],
-    current: int,
+    current: float,
     total: int,
     source: Path,
     skipped: bool = False,
@@ -123,7 +127,7 @@ def _report_progress(
 ) -> None:
     if progress_cb is None:
         return
-    message = f"{current}/{total} {source.name}"
+    message = f"{current:.0f}/{total} {source.name}"
     if skipped:
         message += " skipped"
     progress_cb(
@@ -132,6 +136,40 @@ def _report_progress(
             total=total,
             message=message,
             cancelled=cancelled,
+            image_index=int(current),
+            image_total=total,
+            source_name=source.name,
+            phase="skipped" if skipped else "image",
+        )
+    )
+
+
+def _report_tile_progress(
+    progress_cb: Optional[Callable[[ProgressInfo], None]],
+    image_index: int,
+    image_total: int,
+    source: Path,
+    tile_info: ProgressInfo,
+) -> None:
+    if progress_cb is None:
+        return
+
+    tile_total = max(int(tile_info.total), 1)
+    tile_current = max(0.0, float(tile_info.current))
+    overall_current = (image_index - 1) + (tile_current / tile_total)
+    overall_current = min(float(image_total), max(0.0, overall_current))
+    progress_cb(
+        ProgressInfo(
+            current=overall_current,
+            total=image_total,
+            message=(
+                f"第 {image_index}/{image_total} 张 · tile "
+                f"{int(tile_current)}/{tile_total} · {source.name}"
+            ),
+            image_index=image_index,
+            image_total=image_total,
+            source_name=source.name,
+            phase="tile",
         )
     )
 
@@ -166,9 +204,14 @@ def upscale_batch(
 
         out_path = out_dir / f"{source.stem}_x{scale}{source.suffix.lower()}"
         if out_path.exists() and not overwrite:
-            results.append(SuperResResult(ok=True, output_path=out_path))
+            results.append(
+                SuperResResult(ok=True, output_path=out_path, input_path=source)
+            )
             _report_progress(progress_cb, index, total, source, skipped=True)
             continue
+
+        def tile_cb(tile_info: ProgressInfo) -> None:
+            _report_tile_progress(progress_cb, index, total, source, tile_info)
 
         result = upscale_single(
             source,
@@ -176,6 +219,7 @@ def upscale_batch(
             engine,
             scale,
             denoise_strength=denoise_strength,
+            progress_cb=tile_cb,
         )
         results.append(result)
         _report_progress(progress_cb, index, total, source)

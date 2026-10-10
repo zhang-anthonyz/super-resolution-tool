@@ -5,7 +5,7 @@ import pytest
 from PIL import Image
 
 from app.core.sr_engine import SuperResCancelled
-from app.core.types import SuperResResult
+from app.core.types import ProgressInfo, SuperResResult
 from app.pipelines.image_pipeline import (
     SUPPORTED_EXTENSIONS,
     upscale_batch,
@@ -25,6 +25,18 @@ class _NearestEngine:
         self.denoise_strengths.append(denoise_strength)
         if self.calls in self.fail_on_call:
             raise RuntimeError("synthetic failure")
+        return np.repeat(np.repeat(image, scale, axis=0), scale, axis=1)
+
+
+class _TileProgressEngine:
+    def __init__(self, tile_progress):
+        self.tile_progress = list(tile_progress)
+        self.cancelled = False
+
+    def upscale_image(self, image, scale=4, progress_cb=None, denoise_strength=0.5):
+        for current, total in self.tile_progress:
+            if progress_cb is not None:
+                progress_cb(ProgressInfo(current=current, total=total, message=f"tile {current}/{total}"))
         return np.repeat(np.repeat(image, scale, axis=0), scale, axis=1)
 
 
@@ -81,6 +93,28 @@ def test_upscale_single_passes_denoise_strength(tmp_path):
     assert engine.denoise_strengths == [0.25]
 
 
+def test_upscale_single_forwards_tile_progress(tmp_path):
+    source = tmp_path / "input.png"
+    output = tmp_path / "output.png"
+    _write_image(source, size=(2, 2))
+    engine = _TileProgressEngine([(1, 2), (2, 2)])
+    reported = []
+
+    result = upscale_single(
+        source,
+        output,
+        engine,
+        scale=2,
+        progress_cb=lambda info: reported.append((info.current, info.total, info.message)),
+    )
+
+    assert result.ok is True
+    assert reported == [
+        (1, 2, "tile 1/2"),
+        (2, 2, "tile 2/2"),
+    ]
+
+
 def test_upscale_batch_filters_extensions_and_names_outputs(tmp_path):
     source_dir = tmp_path / "input"
     out_dir = tmp_path / "output"
@@ -135,6 +169,36 @@ def test_upscale_batch_reports_current_and_total(tmp_path):
     )
 
     assert reported == [(1, 2), (2, 2)]
+
+
+def test_upscale_batch_maps_tile_progress_to_continuous_overall_progress(tmp_path):
+    source_a = tmp_path / "a.png"
+    source_b = tmp_path / "b.png"
+    _write_image(source_a, size=(2, 2))
+    _write_image(source_b, size=(2, 2))
+    engine = _TileProgressEngine([(1, 2), (2, 2)])
+    reported = []
+
+    upscale_batch(
+        [source_a, source_b],
+        tmp_path / "output",
+        engine,
+        scale=2,
+        progress_cb=lambda info: reported.append(
+            (info.current, info.total, info.phase, info.image_index, info.message)
+        ),
+    )
+
+    assert [item[:4] for item in reported] == [
+        (0.5, 2, "tile", 1),
+        (1.0, 2, "tile", 1),
+        (1, 2, "image", 1),
+        (1.5, 2, "tile", 2),
+        (2.0, 2, "tile", 2),
+        (2, 2, "image", 2),
+    ]
+    assert "第 1/2 张 · tile 1/2" in reported[0][4]
+    assert "第 2/2 张 · tile 2/2" in reported[4][4]
 
 
 def test_upscale_batch_cancel_flag_propagates_cancellation(tmp_path):

@@ -77,6 +77,9 @@ def test_model_selector_defaults_to_general_with_denoise_slider(qapp):
         assert selector.selected_model_name() == "realesr-general-x4v3"
         assert selector.denoise_slider.value() == 50
         assert selector.current_model().denoise_pair_path is not None
+        assert selector.layout().spacing() == 12
+        assert selector.model_combo.maximumWidth() == 560
+        assert selector.denoise_group.isVisibleTo(selector) is True
     finally:
         window.close()
         window.deleteLater()

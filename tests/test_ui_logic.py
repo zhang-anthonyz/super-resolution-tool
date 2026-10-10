@@ -17,6 +17,7 @@ from app.ui.ui_logic import (
     is_8bit_sdr,
     model_options,
     model_scales,
+    progress_bar_value,
     recommended_backend_index,
     supported_model_formats,
     video_8bit_notice,
@@ -147,6 +148,12 @@ def test_format_log_line_has_timestamp_and_level():
     assert format_log_line("Info", "hello", timestamp="12:00:00") == (
         "[12:00:00] [Info] hello"
     )
+
+
+def test_progress_bar_value_rounds_half_up():
+    assert progress_bar_value(2.5) == 3
+    assert progress_bar_value(2.4) == 2
+    assert progress_bar_value(0.0) == 0
 
 
 def test_gpu_summary_contains_amd_and_model_name():

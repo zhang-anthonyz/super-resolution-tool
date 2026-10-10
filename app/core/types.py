@@ -99,16 +99,21 @@ class SuperResResult:
     output_path: Optional[Path] = None
     error: Optional[str] = None
     elapsed_seconds: float = 0.0
+    input_path: Optional[Path] = None
 
 
 @dataclass
 class ProgressInfo:
     """进度回调载荷。"""
 
-    current: int
+    current: float
     total: int
     message: str = ""
     cancelled: bool = False
+    image_index: Optional[int] = None
+    image_total: Optional[int] = None
+    source_name: Optional[str] = None
+    phase: Optional[str] = None
 
     @property
     def percent(self) -> float:

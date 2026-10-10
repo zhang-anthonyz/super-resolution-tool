@@ -1,6 +1,7 @@
 """Main PySide6 window for the super-resolution tool."""
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import Optional, Sequence
 
@@ -37,6 +38,7 @@ from ..core.types import (
     SuperResResult,
     VideoCodec,
 )
+from ..pipelines.ffmpeg_utils import probe_video
 from . import ui_logic
 from . import theme
 from .ui_logic import BackendChoice
@@ -159,6 +161,11 @@ class MainWindow(QMainWindow):
         )
         self._image_worker: Optional[ImageUpscaleWorker] = None
         self._video_worker: Optional[VideoUpscaleWorker] = None
+        self._image_progress_key: Optional[tuple[int, str]] = None
+        self._image_progress_last_time = 0.0
+        self._image_progress_last_percent = -1.0
+        self._video_progress_last_time = 0.0
+        self._video_progress_last_frame = -1
 
         self.setWindowTitle("Super Resolution Tool")
         self.resize(1120, 820)
@@ -170,8 +177,8 @@ class MainWindow(QMainWindow):
     def _build_ui(self) -> None:
         root = QWidget()
         root_layout = QVBoxLayout(root)
-        root_layout.setContentsMargins(14, 14, 14, 14)
-        root_layout.setSpacing(10)
+        root_layout.setContentsMargins(18, 18, 18, 18)
+        root_layout.setSpacing(14)
 
         self.gpu_label = QLabel(ui_logic.gpu_summary(self.gpu, self.available))
         self.gpu_label.setObjectName("gpuInfoLabel")
@@ -217,8 +224,8 @@ class MainWindow(QMainWindow):
     def _build_image_tab(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(10)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(14)
 
         input_group = QGroupBox("输入图片")
         input_layout = QVBoxLayout(input_group)
@@ -294,8 +301,8 @@ class MainWindow(QMainWindow):
     def _build_video_tab(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(10)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(14)
 
         input_group = QGroupBox("输入视频")
         input_form = QFormLayout(input_group)
@@ -500,11 +507,28 @@ class MainWindow(QMainWindow):
         backend = self.image_model_selector.current_backend()
         denoise_strength = self.image_model_selector.denoise_strength()
         out_dir = ui_logic.resolve_project_path(out_dir_text)
+        self._image_progress_key = None
+        self._image_progress_last_time = 0.0
+        self._image_progress_last_percent = -1.0
         self._reset_image_progress()
 
         self.image_log.append(
             "Info",
-            f"开始处理 {len(paths)} 张图片：后端 {ui_logic.backend_label(backend, self.gpu)}",
+            f"检测到显卡：{ui_logic.gpu_summary(self.gpu, self.available)}",
+        )
+        denoise_text = (
+            f"{denoise_strength:.2f}"
+            if getattr(model, "denoise_pair_path", None)
+            else "无"
+        )
+        self.image_log.append(
+            "Info",
+            f"加载模型：{model.name} / {ui_logic.backend_label(backend, self.gpu)} / "
+            f"{scale}x / 降噪强度 {denoise_text}",
+        )
+        self.image_log.append(
+            "Info",
+            f"开始处理 {len(paths)} 张图片：输出目录 {out_dir}",
         )
         if scale_changed:
             self.image_log.append(
@@ -575,7 +599,36 @@ class MainWindow(QMainWindow):
             return
 
         model = self.video_model_selector.current_model()
+        self._video_progress_last_time = 0.0
+        self._video_progress_last_frame = -1
         self._reset_video_progress()
+        self.video_log.append(
+            "Info",
+            f"检测到显卡：{ui_logic.gpu_summary(self.gpu, self.available)}",
+        )
+        denoise_text = (
+            f"{denoise_strength:.2f}"
+            if getattr(model, "denoise_pair_path", None)
+            else "无"
+        )
+        self.video_log.append(
+            "Info",
+            f"加载模型：{model.name} / {ui_logic.backend_label(backend, self.gpu)} / "
+            f"{scale}x / 降噪强度 {denoise_text}",
+        )
+        try:
+            video_info = probe_video(input_path)
+            video_detail = (
+                f"{video_info['width']}x{video_info['height']} / "
+                f"{video_info['fps']:.2f} fps / "
+                f"{video_info['total_frames']} 帧 / {codec.value}"
+            )
+        except Exception:
+            video_detail = "无法读取视频信息"
+        self.video_log.append(
+            "Info",
+            f"视频信息：{input_path.name} / {video_detail}",
+        )
         self.video_log.append(
             "Info",
             f"开始处理视频：{input_path.name} / 后端 "
@@ -614,34 +667,104 @@ class MainWindow(QMainWindow):
     def _on_image_progress(self, info: ProgressInfo) -> None:
         if info.total > 0:
             self.image_progress.setRange(0, info.total)
-            self.image_progress.setValue(info.current)
+            self.image_progress.setValue(ui_logic.progress_bar_value(info.current))
         else:
             self.image_progress.setRange(0, 100)
             self.image_progress.setValue(0)
         self.image_status.setText(info.message)
+        self._log_image_progress(info)
 
     def _on_video_progress(self, info: ProgressInfo) -> None:
         if info.total > 0:
             self.video_progress.setRange(0, info.total)
-            self.video_progress.setValue(info.current)
+            self.video_progress.setValue(ui_logic.progress_bar_value(info.current))
         else:
             self.video_progress.setRange(0, 100)
             self.video_progress.setValue(0)
         self.video_status.setText(info.message)
+        self._log_video_progress(info)
+
+    def _log_image_progress(self, info: ProgressInfo) -> None:
+        source_name = info.source_name
+        image_key = None
+        if info.image_index is not None and source_name is not None:
+            image_key = (int(info.image_index), source_name)
+
+        if image_key is not None and image_key != self._image_progress_key:
+            self._image_progress_key = image_key
+            self._image_progress_last_percent = -1.0
+            self.image_log.append(
+                "Info",
+                f"处理 {source_name}（{info.percent:.1f}%）",
+            )
+
+        now = time.monotonic()
+        should_log_tile = (
+            info.phase == "tile"
+            and info.message
+            and (
+                info.percent >= self._image_progress_last_percent + 10.0
+                or now - self._image_progress_last_time >= 1.0
+                or info.percent >= 99.999
+            )
+        )
+        if should_log_tile:
+            self._image_progress_last_time = now
+            self._image_progress_last_percent = info.percent
+            self.image_log.append("Info", info.message)
+
+    def _log_video_progress(self, info: ProgressInfo) -> None:
+        now = time.monotonic()
+        current = int(info.current)
+        should_log = (
+            info.message
+            and (
+                current % 10 == 0
+                or current == info.total
+                or now - self._video_progress_last_time >= 1.0
+            )
+        )
+        if not should_log:
+            return
+        self._video_progress_last_time = now
+        self._video_progress_last_frame = current
+        self.video_log.append("Info", info.message)
 
     def _on_image_finished(self, results: object) -> None:
         self._set_image_running(False)
         results = list(results or [])
         ok_count = sum(1 for result in results if getattr(result, "ok", False))
+        fail_count = len(results) - ok_count
+        total_elapsed = sum(
+            float(getattr(result, "elapsed_seconds", 0.0) or 0.0)
+            for result in results
+        )
         self.image_progress.setRange(0, 100)
         self.image_progress.setValue(100 if results else 0)
-        self.image_status.setText(f"完成：成功 {ok_count}/{len(results)}")
-        self.image_log.append("Success", f"处理完成，成功 {ok_count}/{len(results)}")
+        self.image_status.setText(
+            f"完成：成功 {ok_count} / 失败 {fail_count}"
+        )
         for result in results:
-            if not getattr(result, "ok", False):
+            elapsed = float(getattr(result, "elapsed_seconds", 0.0) or 0.0)
+            if getattr(result, "ok", False):
+                output = getattr(result, "output_path", None)
+                self.image_log.append(
+                    "Info",
+                    f"保存到 {output}（耗时 {elapsed:.1f}s）",
+                )
+            else:
+                source = getattr(result, "input_path", None)
                 output = getattr(result, "output_path", None)
                 message = getattr(result, "error", None) or "未知错误"
-                self.image_log.append("Error", f"{output or '图片'}：{message}")
+                self.image_log.append(
+                    "Error",
+                    f"{source or output or '图片'}：{message}",
+                )
+        self.image_log.append(
+            "Success",
+            f"完成统计：成功 {ok_count} / 失败 {fail_count} / "
+            f"总耗时 {total_elapsed:.1f}s",
+        )
         self._cleanup_image_worker()
 
     def _on_image_error(self, message: str) -> None:
@@ -665,9 +788,11 @@ class MainWindow(QMainWindow):
         self.video_progress.setRange(0, 100)
         self.video_progress.setValue(100)
         self.video_status.setText("完成")
+        elapsed = float(getattr(result, "elapsed_seconds", 0.0) or 0.0)
         self.video_log.append(
             "Success",
-            f"视频处理完成：{getattr(result, 'output_path', '')}",
+            f"视频处理完成：{getattr(result, 'output_path', '')} "
+            f"（耗时 {elapsed:.1f}s）",
         )
         self._cleanup_video_worker()
 

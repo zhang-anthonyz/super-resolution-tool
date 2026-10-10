@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
     QFormLayout,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -56,13 +57,20 @@ class ModelSelector(QWidget):
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
+        layout.setSpacing(12)
 
-        form = QFormLayout()
-        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
-        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        model_group = QGroupBox("模型")
+        model_form = QFormLayout(model_group)
+        model_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        model_form.setFieldGrowthPolicy(
+            QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow
+        )
+        model_form.setVerticalSpacing(8)
+        model_form.setHorizontalSpacing(12)
 
         self.model_combo = QComboBox()
+        self.model_combo.setMinimumWidth(240)
+        self.model_combo.setMaximumWidth(560)
         for name, display in model_options():
             self.model_combo.addItem(f"{name} · {display}", name)
         self.model_combo.addItem("自定义模型", None)
@@ -77,8 +85,13 @@ class ModelSelector(QWidget):
         model_layout.addWidget(self.model_browse_button)
 
         self.backend_combo = QComboBox()
+        self.backend_combo.setMaximumWidth(360)
         self._populate_backend_combo(backend_options)
 
+        self.denoise_group = QGroupBox("降噪")
+        denoise_group_layout = QVBoxLayout(self.denoise_group)
+        denoise_group_layout.setContentsMargins(10, 8, 10, 8)
+        denoise_group_layout.setSpacing(8)
         self.denoise_row = QWidget()
         denoise_layout = QHBoxLayout(self.denoise_row)
         denoise_layout.setContentsMargins(0, 0, 0, 0)
@@ -96,17 +109,19 @@ class ModelSelector(QWidget):
         denoise_layout.addWidget(self.denoise_slider, 1)
         denoise_layout.addWidget(self.denoise_value_label)
         self.denoise_row.setVisible(False)
+        denoise_group_layout.addWidget(self.denoise_row)
+        self.denoise_group.setVisible(False)
 
         self.model_info_label = QLabel()
         self.model_info_label.setObjectName("mutedLabel")
         self.model_info_label.setWordWrap(True)
 
-        form.addRow("超分模型", self.model_combo)
-        form.addRow("模型文件", model_row)
-        form.addRow("推理后端", self.backend_combo)
-        form.addRow("降噪强度", self.denoise_row)
-        form.addRow("", self.model_info_label)
-        layout.addLayout(form)
+        model_form.addRow("超分模型", self.model_combo)
+        model_form.addRow("模型文件", model_row)
+        model_form.addRow("推理后端", self.backend_combo)
+        layout.addWidget(model_group)
+        layout.addWidget(self.denoise_group)
+        layout.addWidget(self.model_info_label)
 
         self.model_combo.currentIndexChanged.connect(self._on_model_changed)
         self.backend_combo.currentIndexChanged.connect(self._update_model_info)
@@ -136,7 +151,9 @@ class ModelSelector(QWidget):
             self.model_path_edit.setText(str(resolve_project_path(model.model_path)))
             self._sync_scale_selector(model)
 
-        self.denoise_row.setVisible(is_denoise_model(model))
+        has_denoise = is_denoise_model(model)
+        self.denoise_row.setVisible(has_denoise)
+        self.denoise_group.setVisible(has_denoise)
         self._update_model_info()
         self.model_changed.emit(model)
 
