@@ -5,17 +5,20 @@ import pytest
 from app.core.paths import app_root
 from app.core.types import Backend, GpuInfo, GpuType, GpuVendor, Scene
 from app.ui.ui_logic import (
-    DEFAULT_MODEL_RELATIVE_PATH,
     backend_choices,
     build_model_meta,
     collect_image_files,
+    copy_model_to_library,
     default_model_path,
     effective_scale,
     fixed_scale_for_model,
     format_log_line,
     gpu_summary,
     is_8bit_sdr,
+    model_options,
+    model_scales,
     recommended_backend_index,
+    supported_model_formats,
     video_8bit_notice,
 )
 
@@ -35,12 +38,59 @@ def make_gpu(
 
 @pytest.mark.parametrize("scene", list(Scene))
 def test_scene_default_model_mapping(scene):
-    assert default_model_path(scene) == app_root() / DEFAULT_MODEL_RELATIVE_PATH
+    path = default_model_path(scene)
+    assert path.parent == app_root() / "models" / "onnx"
+    assert path.suffix == ".onnx"
 
-    meta = build_model_meta(default_model_path(scene), scene, Backend.DIRECTML)
-    assert meta.name == "RealESRGAN_x4plus"
+    meta = build_model_meta(path, scene, Backend.DIRECTML)
+    assert meta.name == path.stem
     assert meta.scene == scene
     assert meta.scale == 4
+
+
+def test_model_scales_are_fixed_or_scale_aware():
+    fixed = build_model_meta(
+        app_root() / "models" / "onnx" / "realesr-general-x4v3.onnx",
+        Scene.REALISTIC,
+        Backend.DIRECTML,
+    )
+    assert model_scales(fixed) == [4]
+
+    scale_aware = build_model_meta(
+        app_root() / "models" / "onnx" / "custom.onnx",
+        Scene.REALISTIC,
+        Backend.DIRECTML,
+        fixed_scale=None,
+    )
+    assert model_scales(scale_aware) == [2, 3, 4]
+
+
+def test_model_options_expose_fp16_registry_with_denoise_hints():
+    options = model_options()
+
+    assert [name for name, _ in options] == [
+        "realesr-general-x4v3",
+        "realesr-general-wdn-x4v3",
+        "RealESRGAN_x4plus_anime_6B",
+        "RealESRGAN_x4plus_fp16",
+    ]
+    assert any("降噪" in display for _, display in options)
+
+
+def test_supported_model_formats_and_copy_model_to_library(tmp_path):
+    formats = supported_model_formats()
+    assert ".onnx" in formats
+    assert ".json" in formats
+
+    source = tmp_path / "custom.onnx"
+    source.write_bytes(b"onnx")
+    target = copy_model_to_library(source, tmp_path / "library")
+    assert target == (tmp_path / "library" / "custom.onnx")
+    assert target.read_bytes() == b"onnx"
+
+    renamed = copy_model_to_library(source, tmp_path / "library")
+    assert renamed == (tmp_path / "library" / "custom (1).onnx")
+    assert renamed.exists()
 
 
 def test_backend_choices_show_amd_recommended_backend_and_unready_vulkan():
@@ -105,4 +155,3 @@ def test_gpu_summary_contains_amd_and_model_name():
     assert "AMD" in summary
     assert "RX 7900 XT" in summary
     assert "DirectML（推荐）" in summary
-

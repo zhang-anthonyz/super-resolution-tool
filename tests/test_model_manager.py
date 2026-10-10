@@ -14,25 +14,33 @@ from app.core.types import Backend, ModelMeta, Scene
 def test_builtin_models_contains_real_esrgan_x4plus():
     models = builtin_models()
 
-    assert len(models) == 1
-    model = models[0]
-    assert model.name == "RealESRGAN_x4plus"
-    assert model.scale == 4
-    assert model.scene == Scene.REALISTIC
-    assert model.backend == Backend.DIRECTML
-    assert model.model_path == Path("models/onnx/RealESRGAN_x4plus.onnx")
+    assert len(models) == 4
+    by_name = {model.name: model for model in models}
+    assert set(by_name) == {
+        "realesr-general-x4v3",
+        "realesr-general-wdn-x4v3",
+        "RealESRGAN_x4plus_anime_6B",
+        "RealESRGAN_x4plus_fp16",
+    }
+
+    for model in models:
+        assert model.scale == 4
+        assert model.backend == Backend.DIRECTML
+        assert model.model_path.suffix == ".onnx"
+        assert "降噪" in model.description or "无降噪" in model.description
 
 
 def test_scene_default_maps_realistic_to_real_esrgan():
     model = scene_default(Scene.REALISTIC)
 
-    assert model.name == "RealESRGAN_x4plus"
+    assert model.name == "realesr-general-x4v3"
     assert model.scale == 4
 
 
-def test_scene_default_rejects_unregistered_scene():
-    with pytest.raises(ValueError, match="No default model"):
-        scene_default(Scene.ANIME_2D)
+def test_scene_default_maps_all_scenes_to_registered_models():
+    assert scene_default(Scene.REALISTIC).name == "realesr-general-x4v3"
+    assert scene_default(Scene.ANIME_2D).name == "RealESRGAN_x4plus_anime_6B"
+    assert scene_default(Scene.CG_3D).name == "realesr-general-x4v3"
 
 
 def _save_scale_aware_identity_model(path: Path) -> None:
@@ -150,4 +158,3 @@ def test_download_model_rejects_sha256_mismatch(tmp_path, monkeypatch):
         )
 
     assert not dest.exists()
-

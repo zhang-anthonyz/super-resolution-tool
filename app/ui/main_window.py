@@ -35,6 +35,7 @@ from ..core.environment_checker import available_backends
 from ..core.types import (
     Backend,
     GpuInfo,
+    ModelMeta,
     ProgressInfo,
     Scene,
     SuperResResult,
@@ -78,6 +79,20 @@ class ScaleSelector(QWidget):
 
     def _sync_custom_state(self) -> None:
         self.custom_spin.setEnabled(self.combo.currentData() is None)
+
+    def set_scales(self, scales: Sequence[int]) -> None:
+        """Replace the selector options with model-specific scales."""
+        self.combo.clear()
+        for scale in scales:
+            self.combo.addItem(f"{scale}x", int(scale))
+        if len(scales) > 1:
+            self.combo.addItem("自定义", None)
+        preferred_index = next(
+            (index for index in range(self.combo.count()) if self.combo.itemData(index) == 4),
+            0,
+        )
+        self.combo.setCurrentIndex(preferred_index)
+        self._sync_custom_state()
 
     def scale(self) -> int:
         selected = self.combo.currentData()
@@ -198,9 +213,10 @@ class MainWindow(QMainWindow):
         form = QFormLayout(config_group)
         form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
 
-        self.scene_combo = QComboBox()
-        for scene, label in ui_logic.SCENE_OPTIONS:
-            self.scene_combo.addItem(label, scene)
+        self.model_combo = QComboBox()
+        for name, display in ui_logic.model_options():
+            self.model_combo.addItem(f"{name} · {display}", name)
+        self.model_combo.addItem("自定义模型", None)
 
         model_row = QWidget()
         model_layout = QHBoxLayout(model_row)
@@ -217,7 +233,7 @@ class MainWindow(QMainWindow):
         self.model_info_label = QLabel()
         self.model_info_label.setObjectName("mutedLabel")
 
-        form.addRow("场景", self.scene_combo)
+        form.addRow("超分模型", self.model_combo)
         form.addRow("模型文件", model_row)
         form.addRow("推理后端", self.backend_combo)
         form.addRow("", self.model_info_label)
@@ -364,7 +380,7 @@ class MainWindow(QMainWindow):
         return page
 
     def _connect_signals(self) -> None:
-        self.scene_combo.currentIndexChanged.connect(self._refresh_model_for_scene)
+        self.model_combo.currentIndexChanged.connect(self._refresh_model_for_scene)
         self.image_start_button.clicked.connect(self.start_image_upscale)
         self.image_cancel_button.clicked.connect(self.cancel_image_upscale)
         self.video_start_button.clicked.connect(self.start_video_upscale)
@@ -382,29 +398,60 @@ class MainWindow(QMainWindow):
         self.backend_combo.setCurrentIndex(recommended)
 
     def _refresh_model_for_scene(self, *_args: object) -> None:
-        scene = self.current_scene()
-        self.model_path_edit.setText(str(ui_logic.default_model_path(scene)))
+        model = self._selected_registry_model()
+        if model is not None:
+            path = ui_logic.resolve_project_path(model.model_path)
+            self.model_path_edit.setText(str(path))
+            scales = ui_logic.model_scales(model)
+            self.image_scale_selector.set_scales(scales)
+            self.video_scale_selector.set_scales(scales)
         self._update_model_info()
 
     def _update_model_info(self) -> None:
-        model = ui_logic.build_model_meta(
-            self._current_model_path(),
-            self.current_scene(),
-            self.current_backend(),
+        model = self.current_model()
+        registry_model = self._selected_registry_model()
+        description = (
+            registry_model.description
+            if registry_model is not None
+            else model.description
         )
         scale_text = f"{model.scale}x" if model.scale else "自动"
         self.model_info_label.setText(
-            f"当前默认模型：{model.name} / 固定倍率：{scale_text}"
+            f"当前模型：{model.name} / 固定倍率：{scale_text} / {description}"
+        )
+
+    def _selected_model_name(self) -> Optional[str]:
+        value = self.model_combo.currentData()
+        return str(value) if value else None
+
+    def _selected_registry_model(self) -> Optional[ModelMeta]:
+        name = self._selected_model_name()
+        if name is None:
+            return None
+        return ui_logic.model_for_name(name)
+
+    def current_model(self) -> ModelMeta:
+        registry_model = self._selected_registry_model()
+        if registry_model is not None:
+            path = ui_logic.resolve_project_path(registry_model.model_path)
+            return ui_logic.build_model_meta(
+                path,
+                registry_model.scene,
+                self.current_backend(),
+                registry_model.scale,
+            )
+
+        path = self._current_model_path()
+        return ui_logic.build_model_meta(
+            path,
+            self.current_scene(),
+            self.current_backend(),
+            ui_logic.fixed_scale_for_model(path),
         )
 
     def current_scene(self) -> Scene:
-        value = self.scene_combo.currentData()
-        if isinstance(value, Scene):
-            return value
-        try:
-            return Scene(str(value).lower())
-        except (TypeError, ValueError):
-            return Scene.REALISTIC
+        registry_model = self._selected_registry_model()
+        return registry_model.scene if registry_model is not None else Scene.REALISTIC
 
     def current_backend(self) -> Backend:
         backend = self.backend_combo.currentData()
@@ -433,10 +480,17 @@ class MainWindow(QMainWindow):
             self,
             "选择 ONNX 模型",
             str(ui_logic.app_root() / "models" / "onnx"),
-            "ONNX 模型 (*.onnx);;所有文件 (*)",
+            ui_logic.supported_model_formats(),
         )
         if path:
-            self.model_path_edit.setText(path)
+            library_dir = ui_logic.app_root() / "models" / "onnx"
+            selected_path = Path(path)
+            if selected_path.resolve().parent != library_dir.resolve():
+                selected_path = ui_logic.copy_model_to_library(selected_path)
+            self.model_path_edit.setText(str(selected_path))
+            custom_index = self.model_combo.findData(None)
+            if custom_index >= 0:
+                self.model_combo.setCurrentIndex(custom_index)
             self._update_model_info()
 
     def _add_image_files(self) -> None:
@@ -524,12 +578,7 @@ class MainWindow(QMainWindow):
 
         requested_scale = self.image_scale_selector.scale()
         scale, scale_changed = ui_logic.effective_scale(model_path, requested_scale)
-        model = ui_logic.build_model_meta(
-            model_path,
-            self.current_scene(),
-            self.current_backend(),
-            fixed_scale=ui_logic.fixed_scale_for_model(model_path),
-        )
+        model = self.current_model()
         backend = self.current_backend()
         out_dir = ui_logic.resolve_project_path(out_dir_text)
 
@@ -603,12 +652,7 @@ class MainWindow(QMainWindow):
             )
             return
 
-        model = ui_logic.build_model_meta(
-            model_path,
-            self.current_scene(),
-            backend,
-            fixed_scale=ui_logic.fixed_scale_for_model(model_path),
-        )
+        model = self.current_model()
         self.video_log.append(
             "Info",
             f"开始处理视频：{input_path.name} / 后端 "

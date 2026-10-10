@@ -29,6 +29,20 @@ def test_preprocess_uint8_hwc_to_normalized_nchw():
     )
 
 
+def test_preprocess_supports_fp16_dtype():
+    image = np.array([[[0, 128, 255]]], dtype=np.uint8)
+
+    tensor = preprocess_image(image, dtype=np.float16)
+
+    assert tensor.dtype == np.float16
+    assert tensor.shape == (1, 3, 1, 1)
+    np.testing.assert_allclose(
+        tensor[0, :, 0, 0],
+        [0.0, 128.0 / 255.0, 1.0],
+        rtol=1e-2,
+    )
+
+
 def test_postprocess_chw_to_uint8_hwc():
     tensor = np.array([[[0.0]], [[0.5]], [[1.0]]], dtype=np.float32)
 

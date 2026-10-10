@@ -12,25 +12,59 @@ from ..core.paths import app_root
 from ..core.sr_engine import OnnxEngine
 from ..core.types import Backend, ModelMeta, Scene
 
-_DEFAULT_MODEL_PATH = Path("models/onnx/RealESRGAN_x4plus.onnx")
+_MODEL_NAMES = (
+    "realesr-general-x4v3",
+    "realesr-general-wdn-x4v3",
+    "RealESRGAN_x4plus_anime_6B",
+    "RealESRGAN_x4plus_fp16",
+)
+
+_MODEL_PATHS = {
+    "realesr-general-x4v3": Path("models/onnx/realesr-general-x4v3.onnx"),
+    "realesr-general-wdn-x4v3": Path("models/onnx/realesr-general-wdn-x4v3.onnx"),
+    "RealESRGAN_x4plus_anime_6B": Path(
+        "models/onnx/RealESRGAN_x4plus_anime_6B.onnx"
+    ),
+    "RealESRGAN_x4plus_fp16": Path("models/onnx/RealESRGAN_x4plus_fp16.onnx"),
+}
+
+_MODEL_DESCRIPTIONS = {
+    "realesr-general-x4v3": (
+        "真实/3D·CG，SRVGG 轻量通用模型，适度降噪（快）"
+    ),
+    "realesr-general-wdn-x4v3": (
+        "真实/3D·CG，SRVGG 轻量通用模型，强降噪"
+    ),
+    "RealESRGAN_x4plus_anime_6B": (
+        "2D 动漫，RRDB 模型，边缘自然，无降噪"
+    ),
+    "RealESRGAN_x4plus_fp16": (
+        "真实，RRDB 重模型，高锐度细节，无降噪"
+    ),
+}
+
 _SCENE_DEFAULT_NAMES = {
-    Scene.REALISTIC: "RealESRGAN_x4plus",
+    Scene.REALISTIC: "realesr-general-x4v3",
+    Scene.ANIME_2D: "RealESRGAN_x4plus_anime_6B",
+    Scene.CG_3D: "realesr-general-x4v3",
 }
 
 
 def builtin_models() -> list[ModelMeta]:
-    """Return the V1 built-in model registry.
-
-    The registry intentionally stays as a function returning fresh dataclass
-    instances. New anime/general/SRMD entries should be added here later.
-    """
+    """Return the V1 built-in fp16 model registry."""
+    scene_by_name = {
+        "realesr-general-x4v3": Scene.REALISTIC,
+        "realesr-general-wdn-x4v3": Scene.REALISTIC,
+        "RealESRGAN_x4plus_anime_6B": Scene.ANIME_2D,
+        "RealESRGAN_x4plus_fp16": Scene.REALISTIC,
+    }
     return [
         ModelMeta(
-            name="RealESRGAN_x4plus",
+            name=name,
             scale=4,
-            scene=Scene.REALISTIC,
+            scene=scene_by_name[name],
             backend=Backend.DIRECTML,
-            model_path=_DEFAULT_MODEL_PATH,
+            model_path=_MODEL_PATHS[name],
             input_name="input",
             output_name="output",
             scale_input=None,
@@ -38,8 +72,9 @@ def builtin_models() -> list[ModelMeta]:
             channel_order="RGB",
             normalize=(0.0, 1.0),
             tile_size=512,
-            description="Real-ESRGAN general 4x super-resolution model",
+            description=_MODEL_DESCRIPTIONS[name],
         )
+        for name in _MODEL_NAMES
     ]
 
 

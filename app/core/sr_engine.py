@@ -69,6 +69,7 @@ class OnnxEngine(SuperResEngine):
         self._input_name: Optional[str] = None
         self._output_name: Optional[str] = None
         self._output_channels: Optional[int] = None
+        self._fp16 = False
         self._precision = "fp16" if backend == Backend.CUDA else "fp32"
 
     def load_model(self, model: ModelMeta) -> None:
@@ -108,9 +109,22 @@ class OnnxEngine(SuperResEngine):
 
         self._session = session
         self._model = model
+        self._fp16 = self._is_fp16_session(session)
+        self._precision = "fp16" if self._fp16 else "fp32"
         self._input_name = self._resolve_io_name(model.input_name, session.get_inputs())
         self._output_name = self._resolve_io_name(model.output_name, session.get_outputs())
         self._output_channels = self._resolve_output_channels(session)
+
+    @staticmethod
+    def _is_fp16_session(session) -> bool:
+        inputs = session.get_inputs()
+        if not inputs:
+            return False
+        input_type = inputs[0].type.lower()
+        return "float16" in input_type
+
+    def _inference_dtype(self):
+        return np.float16 if self._fp16 else np.float32
 
     @staticmethod
     def _resolve_io_name(declared: str, metas) -> str:
@@ -151,6 +165,7 @@ class OnnxEngine(SuperResEngine):
             image,
             channel_order=self._model.channel_order,
             normalize=self._model.normalize,
+            dtype=self._inference_dtype(),
         )
 
         tile_size = int(self._model.tile_size or 512)
@@ -196,7 +211,12 @@ class OnnxEngine(SuperResEngine):
                 region.top : region.bottom,
                 region.left : region.right,
             ]
-            feeds = {self._input_name: np.ascontiguousarray(tile, dtype=np.float32)}
+            feeds = {
+                self._input_name: np.ascontiguousarray(
+                    tile,
+                    dtype=self._inference_dtype(),
+                )
+            }
             self._add_control_inputs(feeds, target_scale)
 
             output = self._session.run([self._output_name], feeds)[0]

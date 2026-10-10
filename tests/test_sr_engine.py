@@ -122,6 +122,20 @@ def test_scale_and_denoise_inputs_are_added_to_feeds():
     np.testing.assert_array_equal(session.feeds[0]["denoise"], [0.0])
 
 
+def test_fp16_engine_feeds_float16_tiles_and_returns_uint8():
+    session = FakeSession(scale=2)
+    model = make_model(scale=2)
+    engine = make_engine(session, model)
+    engine._fp16 = True
+    image = np.zeros((2, 2, 3), dtype=np.uint8)
+
+    output = engine.upscale_image(image, scale=2)
+
+    assert session.feeds[0]["input"].dtype == np.float16
+    assert output.shape == (4, 4, 3)
+    assert output.dtype == np.uint8
+
+
 def test_oom_during_large_tile_falls_back_to_256():
     session = FakeSession(scale=2)
     session.fail_once_with_oom = True

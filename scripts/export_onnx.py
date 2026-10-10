@@ -81,24 +81,63 @@ class RRDBNet(nn.Module):
         return out
 
 
+class SRVGGNetCompact(nn.Module):
+    """紧凑 VGG 风格 SR 网络（realesr-general / animevideov3 系列）。
+
+    上采样在最后一层完成，HR 特征空间不做卷积；输出为像素重组 + 最近邻残差。
+    """
+
+    def __init__(self, num_in_ch=3, num_out_ch=3, num_feat=64, num_conv=32, upscale=4, act_type="prelu"):
+        super().__init__()
+        self.upscale = upscale
+        self.body = nn.ModuleList()
+        self.body.append(nn.Conv2d(num_in_ch, num_feat, 3, 1, 1))
+        self.body.append(nn.PReLU(num_parameters=num_feat))
+        for _ in range(num_conv):
+            self.body.append(nn.Conv2d(num_feat, num_feat, 3, 1, 1))
+            if act_type == "prelu":
+                self.body.append(nn.PReLU(num_parameters=num_feat))
+            elif act_type == "leakyrelu":
+                self.body.append(nn.LeakyReLU(negative_slope=0.1, inplace=True))
+        self.body.append(nn.Conv2d(num_feat, num_out_ch * upscale * upscale, 3, 1, 1))
+        self.upsampler = nn.PixelShuffle(upscale)
+
+    def forward(self, x):
+        out = x
+        for layer in self.body:
+            out = layer(out)
+        out = self.upsampler(out)
+        base = F.interpolate(x, scale_factor=self.upscale, mode="nearest")
+        out += base
+        return out
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--scale", type=int, default=4)
     parser.add_argument("--num_block", type=int, default=23)
+    parser.add_argument("--half", action="store_true", help="导出 fp16 模型")
+    parser.add_argument("--arch", choices=["rrdbnet", "srvgg"], default="rrdbnet")
     args = parser.parse_args()
 
-    model = RRDBNet(
-        num_in_ch=3, num_out_ch=3, scale=args.scale,
-        num_feat=64, num_block=args.num_block, num_grow_ch=32,
-    )
+    if args.arch == "srvgg":
+        model = SRVGGNetCompact(num_in_ch=3, num_out_ch=3, num_feat=64, num_conv=32, upscale=args.scale, act_type="prelu")
+    else:
+        model = RRDBNet(
+            num_in_ch=3, num_out_ch=3, scale=args.scale,
+            num_feat=64, num_block=args.num_block, num_grow_ch=32,
+        )
     ckpt = torch.load(args.input, map_location="cpu", weights_only=False)
     state = ckpt.get("params_ema") or ckpt.get("params") or ckpt
     model.load_state_dict(state, strict=True)
     model.eval()
 
     dummy = torch.randn(1, 3, 64, 64)
+    if args.half:
+        model = model.half()
+        dummy = dummy.half()
     torch.onnx.export(
         model,
         dummy,

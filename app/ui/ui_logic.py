@@ -5,6 +5,7 @@ can be unit tested without a QApplication or an offscreen platform.
 """
 from __future__ import annotations
 
+import shutil
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -12,9 +13,9 @@ from typing import Iterable, Optional, Sequence
 
 from ..core.paths import app_root
 from ..core.types import Backend, GpuInfo, GpuVendor, ModelMeta, Scene
+from ..models.model_manager import builtin_models, scene_default
 
 
-DEFAULT_MODEL_RELATIVE_PATH = Path("models/onnx/RealESRGAN_x4plus.onnx")
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 VIDEO_EXTENSIONS = {".mp4", ".mkv", ".mov", ".avi", ".webm", ".m4v"}
 
@@ -23,12 +24,6 @@ SCENE_OPTIONS: tuple[tuple[Scene, str], ...] = (
     (Scene.ANIME_2D, "2D 动漫"),
     (Scene.CG_3D, "3D·CG"),
 )
-
-SCENE_DEFAULT_MODEL_NAMES = {
-    Scene.REALISTIC: "RealESRGAN_x4plus",
-    Scene.ANIME_2D: "RealESRGAN_x4plus",
-    Scene.CG_3D: "RealESRGAN_x4plus",
-}
 
 VENDOR_LABELS = {
     GpuVendor.NVIDIA: "NVIDIA",
@@ -84,13 +79,82 @@ def scene_label(scene: Scene) -> str:
 def default_model_name(scene: Scene) -> str:
     if not isinstance(scene, Scene):
         raise TypeError("scene must be a Scene enum value")
-    return SCENE_DEFAULT_MODEL_NAMES[scene]
+    return scene_default(scene).name
 
 
 def default_model_path(scene: Scene) -> Path:
     """Return the currently registered default model for a scene preset."""
-    default_model_name(scene)
-    return app_root() / DEFAULT_MODEL_RELATIVE_PATH
+    return resolve_project_path(scene_default(scene).model_path)
+
+
+def model_for_name(name: str) -> Optional[ModelMeta]:
+    """Return a built-in model by registry name, if present."""
+    for model in builtin_models():
+        if model.name == name:
+            return model
+    return None
+
+
+def model_for_path(model_path: str | Path) -> Optional[ModelMeta]:
+    """Return a built-in model matching a model file path, if present."""
+    path_name = Path(model_path).name.lower()
+    for model in builtin_models():
+        if Path(model.model_path).name.lower() == path_name:
+            return model
+    return None
+
+
+def model_scales(model: ModelMeta) -> list[int]:
+    """Return selectable scales for a model.
+
+    Fixed-scale models expose only their native scale; scale-aware models
+    expose the V1 supported 2x/3x/4x range.
+    """
+    if model.scale is not None:
+        return [int(model.scale)]
+    return [2, 3, 4]
+
+
+def model_options() -> list[tuple[str, str]]:
+    """Return built-in model name/display pairs for the UI dropdown."""
+    return [
+        (model.name, f"{scene_label(model.scene)} · {model.description}")
+        for model in builtin_models()
+    ]
+
+
+def supported_model_formats() -> str:
+    """Return the file-dialog description for importable model assets."""
+    return "ONNX 模型 (*.onnx);;模型元数据 (*.json)"
+
+
+def copy_model_to_library(
+    src: str | Path,
+    models_dir: str | Path | None = None,
+) -> Path:
+    """Copy an ONNX model into the local model library, avoiding name clashes."""
+    src = Path(src)
+    if not src.is_file():
+        raise FileNotFoundError(f"ONNX model file does not exist: {src}")
+    if src.suffix.lower() != ".onnx":
+        raise ValueError("Only .onnx model files can be copied into the library")
+
+    target_dir = Path(models_dir) if models_dir is not None else app_root() / "models" / "onnx"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target = target_dir / src.name
+    if target.exists():
+        target = _unique_target(target_dir, src.stem, src.suffix)
+
+    shutil.copy2(src, target)
+    return target
+
+
+def _unique_target(directory: Path, stem: str, suffix: str) -> Path:
+    for index in range(1, 10000):
+        candidate = directory / f"{stem} ({index}){suffix}"
+        if not candidate.exists():
+            return candidate
+    raise RuntimeError("Unable to allocate a unique model file name")
 
 
 def fixed_scale_for_model(model_path: str | Path) -> Optional[int]:
@@ -100,6 +164,9 @@ def fixed_scale_for_model(model_path: str | Path) -> Optional[int]:
     by the user.
     """
     name = Path(model_path).name.lower()
+    model = model_for_path(name)
+    if model is not None:
+        return model.scale
     if "x4plus" in name or name.startswith("realesrgan_x4"):
         return 4
     return None

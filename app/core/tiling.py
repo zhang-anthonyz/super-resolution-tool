@@ -136,8 +136,9 @@ def preprocess_image(
     image: np.ndarray,
     channel_order: str = "RGB",
     normalize: tuple[float, float] = (0.0, 1.0),
+    dtype: np.dtype = np.float32,
 ) -> np.ndarray:
-    """Convert an RGB HWC uint8 image to normalized NCHW float32."""
+    """Convert an RGB HWC uint8 image to normalized NCHW tensor."""
     if image.ndim == 2:
         image = image[..., None]
     if image.ndim != 3:
@@ -155,7 +156,7 @@ def preprocess_image(
     mean, std = normalize
     arr = (arr - mean) / std
     chw = np.transpose(arr, (2, 0, 1))
-    return np.ascontiguousarray(chw[None, ...], dtype=np.float32)
+    return np.ascontiguousarray(chw[None, ...], dtype=dtype)
 
 
 def postprocess_tensor(tensor: np.ndarray) -> np.ndarray:
