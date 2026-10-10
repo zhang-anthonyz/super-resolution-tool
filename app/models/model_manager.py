@@ -46,7 +46,7 @@ _MODEL_DESCRIPTIONS = {
         "真实/3D·CG，SRVGG 轻量通用模型，强降噪"
     ),
     "RealESRGAN_x2plus": (
-        "真实，RRDB 2x 模型，适合轻度放大（2 倍）"
+        "真实，RRDB 2x 模型，适合轻度放大（2 倍），无降噪"
     ),
     "RealESRGAN_x4plus_anime_6B": (
         "2D 动漫，RRDB 模型，边缘自然，无降噪"
