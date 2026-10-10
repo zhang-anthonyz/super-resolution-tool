@@ -8,10 +8,10 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, Optional
 
+from ..core.paths import app_root
 from ..core.sr_engine import OnnxEngine
 from ..core.types import Backend, ModelMeta, Scene
 
-_PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _DEFAULT_MODEL_PATH = Path("models/onnx/RealESRGAN_x4plus.onnx")
 _SCENE_DEFAULT_NAMES = {
     Scene.REALISTIC: "RealESRGAN_x4plus",
@@ -64,7 +64,7 @@ def _resolve_model_path(model: ModelMeta) -> Path:
     if path.is_absolute():
         return path
 
-    root_candidate = _PROJECT_ROOT / path
+    root_candidate = app_root() / path
     if root_candidate.exists():
         return root_candidate
     return path
@@ -259,4 +259,3 @@ def download_model(
         partial.unlink(missing_ok=True)
         raise
     return dest
-

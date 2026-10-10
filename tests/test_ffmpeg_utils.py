@@ -47,6 +47,7 @@ def test_encoder_for_vendor_accepts_strings():
 def test_probe_video_parses_ffprobe_json(tmp_path, monkeypatch):
     video = tmp_path / "sample.mp4"
     video.write_bytes(b"")
+    monkeypatch.setattr(ffmpeg_utils, "_vendor_executable_path", lambda name: None)
     monkeypatch.setattr(ffmpeg_utils.shutil, "which", lambda name: f"C:/{name}.exe")
 
     stdout = json.dumps(
@@ -91,6 +92,7 @@ def test_probe_video_parses_ffprobe_json(tmp_path, monkeypatch):
 def test_probe_video_reports_no_audio(tmp_path, monkeypatch):
     video = tmp_path / "sample.mp4"
     video.write_bytes(b"")
+    monkeypatch.setattr(ffmpeg_utils, "_vendor_executable_path", lambda name: None)
     monkeypatch.setattr(ffmpeg_utils.shutil, "which", lambda name: f"C:/{name}.exe")
     stdout = json.dumps(
         {
@@ -120,6 +122,7 @@ def test_probe_video_reports_no_audio(tmp_path, monkeypatch):
 
 
 def test_run_ffmpeg_resolves_name_without_shell(monkeypatch):
+    monkeypatch.setattr(ffmpeg_utils, "_vendor_executable_path", lambda name: None)
     monkeypatch.setattr(ffmpeg_utils.shutil, "which", lambda name: f"C:/tools/{name}.exe")
     captured = {}
 

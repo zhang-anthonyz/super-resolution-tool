@@ -2,6 +2,8 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .venv/
+build/
+dist/
 
 # 模型文件（大文件，不入库）
 models/onnx/*.onnx

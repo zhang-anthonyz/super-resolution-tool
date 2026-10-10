@@ -7,18 +7,34 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
+from ..core.paths import app_root
 from ..core.types import GpuVendor, VideoCodec
 
 logger = logging.getLogger(__name__)
 
 
+def _vendor_executable_path(name: str) -> Optional[Path]:
+    """Return the packaged/source vendor executable when it exists."""
+    candidate = app_root() / "vendor" / f"{name}.exe"
+    return candidate if candidate.is_file() else None
+
+
 def _first_executable(command: list[str]) -> str:
     if not command:
         raise ValueError("ffmpeg command must not be empty")
-    resolved = shutil.which(command[0])
-    return str(resolved) if resolved else str(command[0])
+    name = command[0]
+    explicit = Path(name)
+    if explicit.is_absolute():
+        return str(explicit)
+
+    vendor_executable = _vendor_executable_path(name)
+    if vendor_executable is not None:
+        return str(vendor_executable)
+
+    resolved = shutil.which(name)
+    return str(resolved) if resolved else str(name)
 
 
 def run_ffmpeg(args: list[str], **popen_kwargs: Any) -> subprocess.Popen:
@@ -92,7 +108,7 @@ def probe_video(path: str | Path) -> dict[str, Any]:
     ``has_audio``. ``total_frames`` may be zero when FFprobe cannot determine
     it, which is normal for variable-frame-rate media.
     """
-    executable = shutil.which("ffprobe")
+    executable = _vendor_executable_path("ffprobe") or shutil.which("ffprobe")
     if not executable:
         raise FileNotFoundError("ffprobe not found in PATH")
 

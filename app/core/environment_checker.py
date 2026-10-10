@@ -29,11 +29,10 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, Optional
 
+from .paths import app_root
 from .types import Backend, GpuInfo, GpuType, GpuVendor
 
 logger = logging.getLogger(__name__)
-
-_PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 class EnvironmentCheckError(Exception):
@@ -97,7 +96,7 @@ def _is_hdr_from_stream(stream: dict[str, Any]) -> bool:
 
 def _load_config() -> dict[str, Any]:
     """读取项目根目录 config.yaml；配置缺失或损坏时返回空字典。"""
-    config_path = _PROJECT_ROOT / "config.yaml"
+    config_path = app_root() / "config.yaml"
     if not config_path.is_file():
         return {}
 
@@ -144,11 +143,12 @@ def _config_path(section: str, key: str) -> Optional[str]:
 
 def _resolve_vendor_path(key: str, default_name: str) -> Path:
     """解析外部工具路径，优先 config，其次项目根目录 vendor。"""
+    root = app_root()
     configured = _config_path("paths", key)
-    raw = configured or str(_PROJECT_ROOT / "vendor" / default_name)
+    raw = configured or str(root / "vendor" / default_name)
     path = Path(raw)
     if not path.is_absolute():
-        path = _PROJECT_ROOT / path
+        path = root / path
     return path
 
 
