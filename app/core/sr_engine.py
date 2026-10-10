@@ -14,6 +14,9 @@ from typing import Callable, Optional
 import numpy as np
 from PIL import Image
 
+# 解除 Pillow 解压炸弹限制（Vulkan 后端读写大图）
+Image.MAX_IMAGE_PIXELS = None
+
 from .paths import app_root
 from .tiling import postprocess_tensor, preprocess_image, tile_regions
 from .types import Backend, ModelMeta, ProgressInfo

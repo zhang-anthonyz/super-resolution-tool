@@ -8,6 +8,9 @@ from typing import Any, Callable, Optional
 import numpy as np
 from PIL import Image
 
+# 超分工具需处理大图（4x 超分后像素激增），解除 Pillow 解压炸弹限制
+Image.MAX_IMAGE_PIXELS = None
+
 from ..core.sr_engine import SuperResCancelled
 from ..core.types import ProgressInfo, SuperResResult
 
