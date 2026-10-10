@@ -74,6 +74,8 @@ def test_directml_nearest_2x_integration(tmp_path):
     )
     engine = OnnxEngine(Backend.DIRECTML)
     engine.load_model(model)
+    # 关键断言：确认 DirectML 真正生效，而非静默 fallback 到 CPU
+    assert "DmlExecutionProvider" in engine._session.get_providers()
 
     rng = np.random.default_rng(7)
     image = rng.integers(0, 256, size=(64, 64, 3), dtype=np.uint8)
