@@ -42,6 +42,7 @@ from ..core.types import (
     VideoCodec,
 )
 from . import ui_logic
+from . import theme
 from .ui_logic import BackendChoice
 from .workers import ImageUpscaleWorker, VideoUpscaleWorker
 
@@ -102,12 +103,7 @@ class ScaleSelector(QWidget):
 class LogPanel(QWidget):
     """Timestamped, color-coded, copyable log panel."""
 
-    LEVEL_COLORS = {
-        "Info": QColor("#9ca3af"),
-        "Warning": QColor("#fbbf24"),
-        "Error": QColor("#f87171"),
-        "Success": QColor("#4ade80"),
-    }
+    LEVEL_COLORS = {key: QColor(value) for key, value in theme.LOG_LEVEL_COLORS.items()}
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -287,7 +283,8 @@ class MainWindow(QMainWindow):
         run_group = QGroupBox("任务")
         run_layout = QVBoxLayout(run_group)
         self.image_progress = QProgressBar()
-        self.image_progress.setRange(0, 0)
+        self.image_progress.setRange(0, 100)
+        self.image_progress.setValue(0)
         self.image_status = QLabel("就绪")
         self.image_status.setObjectName("mutedLabel")
         controls = QHBoxLayout()
@@ -359,7 +356,8 @@ class MainWindow(QMainWindow):
         run_group = QGroupBox("任务")
         run_layout = QVBoxLayout(run_group)
         self.video_progress = QProgressBar()
-        self.video_progress.setRange(0, 0)
+        self.video_progress.setRange(0, 100)
+        self.video_progress.setValue(0)
         self.video_status = QLabel("就绪")
         self.video_status.setObjectName("mutedLabel")
         controls = QHBoxLayout()
@@ -559,6 +557,14 @@ class MainWindow(QMainWindow):
         if folder:
             self.video_output_dir_edit.setText(folder)
 
+    def _reset_image_progress(self) -> None:
+        self.image_progress.setRange(0, 100)
+        self.image_progress.setValue(0)
+
+    def _reset_video_progress(self) -> None:
+        self.video_progress.setRange(0, 100)
+        self.video_progress.setValue(0)
+
     def start_image_upscale(self) -> None:
         if self._image_worker is not None and self._image_worker.isRunning():
             return
@@ -581,6 +587,7 @@ class MainWindow(QMainWindow):
         model = self.current_model()
         backend = self.current_backend()
         out_dir = ui_logic.resolve_project_path(out_dir_text)
+        self._reset_image_progress()
 
         self.image_log.append(
             "Info",
@@ -653,6 +660,7 @@ class MainWindow(QMainWindow):
             return
 
         model = self.current_model()
+        self._reset_video_progress()
         self.video_log.append(
             "Info",
             f"开始处理视频：{input_path.name} / 后端 "
@@ -692,7 +700,8 @@ class MainWindow(QMainWindow):
             self.image_progress.setRange(0, info.total)
             self.image_progress.setValue(info.current)
         else:
-            self.image_progress.setRange(0, 0)
+            self.image_progress.setRange(0, 100)
+            self.image_progress.setValue(0)
         self.image_status.setText(info.message)
 
     def _on_video_progress(self, info: ProgressInfo) -> None:
@@ -700,16 +709,16 @@ class MainWindow(QMainWindow):
             self.video_progress.setRange(0, info.total)
             self.video_progress.setValue(info.current)
         else:
-            self.video_progress.setRange(0, 0)
+            self.video_progress.setRange(0, 100)
+            self.video_progress.setValue(0)
         self.video_status.setText(info.message)
 
     def _on_image_finished(self, results: object) -> None:
         self._set_image_running(False)
         results = list(results or [])
         ok_count = sum(1 for result in results if getattr(result, "ok", False))
-        if results:
-            self.image_progress.setRange(0, len(results))
-            self.image_progress.setValue(len(results))
+        self.image_progress.setRange(0, 100)
+        self.image_progress.setValue(100 if results else 0)
         self.image_status.setText(f"完成：成功 {ok_count}/{len(results)}")
         self.image_log.append("Success", f"处理完成，成功 {ok_count}/{len(results)}")
         for result in results:
@@ -721,20 +730,24 @@ class MainWindow(QMainWindow):
 
     def _on_image_error(self, message: str) -> None:
         self._set_image_running(False)
+        self.image_progress.setRange(0, 100)
+        self.image_progress.setValue(0)
         self.image_status.setText("处理失败")
         self.image_log.append("Error", message)
         self._cleanup_image_worker()
 
     def _on_image_cancelled(self) -> None:
         self._set_image_running(False)
+        self.image_progress.setRange(0, 100)
+        self.image_progress.setValue(0)
         self.image_status.setText("已取消")
         self.image_log.append("Warning", "任务已取消")
         self._cleanup_image_worker()
 
     def _on_video_finished(self, result: SuperResResult) -> None:
         self._set_video_running(False)
-        self.video_progress.setRange(0, 1)
-        self.video_progress.setValue(1)
+        self.video_progress.setRange(0, 100)
+        self.video_progress.setValue(100)
         self.video_status.setText("完成")
         self.video_log.append(
             "Success",
@@ -744,12 +757,16 @@ class MainWindow(QMainWindow):
 
     def _on_video_error(self, message: str) -> None:
         self._set_video_running(False)
+        self.video_progress.setRange(0, 100)
+        self.video_progress.setValue(0)
         self.video_status.setText("处理失败")
         self.video_log.append("Error", message)
         self._cleanup_video_worker()
 
     def _on_video_cancelled(self) -> None:
         self._set_video_running(False)
+        self.video_progress.setRange(0, 100)
+        self.video_progress.setValue(0)
         self.video_status.setText("已取消")
         self.video_log.append("Warning", "任务已取消")
         self._cleanup_video_worker()
@@ -784,118 +801,4 @@ class MainWindow(QMainWindow):
         super().closeEvent(event)
 
     def _apply_style(self) -> None:
-        self.setStyleSheet(
-            """
-            QMainWindow, QWidget {
-                background-color: #10151f;
-                color: #e5e7eb;
-                font-family: "Segoe UI", "Microsoft YaHei UI";
-                font-size: 13px;
-            }
-            QLabel#gpuInfoLabel {
-                background-color: #132232;
-                border: 1px solid #155e75;
-                border-radius: 6px;
-                padding: 10px 12px;
-                color: #a5f3fc;
-                font-weight: 600;
-            }
-            QLabel#mutedLabel {
-                color: #9ca3af;
-                font-size: 12px;
-            }
-            QTabWidget::pane {
-                border: 1px solid #263242;
-                border-radius: 6px;
-                top: -1px;
-            }
-            QTabBar::tab {
-                background: #151c28;
-                color: #cbd5e1;
-                padding: 9px 18px;
-                border: 1px solid #263242;
-                border-bottom: none;
-                border-top-left-radius: 6px;
-                border-top-right-radius: 6px;
-            }
-            QTabBar::tab:selected {
-                background: #0f766e;
-                color: #ffffff;
-            }
-            QGroupBox {
-                border: 1px solid #263242;
-                border-radius: 6px;
-                margin-top: 12px;
-                padding-top: 8px;
-                font-weight: 600;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 4px;
-                color: #7dd3fc;
-            }
-            QLineEdit, QComboBox, QSpinBox, QPlainTextEdit, QListWidget {
-                background-color: #151c28;
-                border: 1px solid #2b3949;
-                border-radius: 5px;
-                padding: 5px 7px;
-                color: #e5e7eb;
-                selection-background-color: #0f766e;
-            }
-            QLineEdit:focus, QComboBox:focus, QSpinBox:focus,
-            QPlainTextEdit:focus, QListWidget:focus {
-                border-color: #22d3ee;
-            }
-            QPushButton {
-                background-color: #1e293b;
-                border: 1px solid #334155;
-                border-radius: 5px;
-                padding: 6px 12px;
-                color: #e5e7eb;
-            }
-            QPushButton:hover {
-                background-color: #27364a;
-                border-color: #475569;
-            }
-            QPushButton:pressed {
-                background-color: #16212e;
-            }
-            QPushButton:disabled {
-                background-color: #151c28;
-                color: #64748b;
-                border-color: #263242;
-            }
-            QPushButton#primaryButton {
-                background-color: #0f766e;
-                border-color: #14b8a6;
-                color: #ffffff;
-                font-weight: 600;
-            }
-            QPushButton#primaryButton:hover {
-                background-color: #0d9488;
-            }
-            QProgressBar {
-                background-color: #151c28;
-                border: 1px solid #2b3949;
-                border-radius: 5px;
-                text-align: center;
-                color: #e5e7eb;
-            }
-            QProgressBar::chunk {
-                background-color: #14b8a6;
-                border-radius: 4px;
-            }
-            QCheckBox::indicator {
-                width: 16px;
-                height: 16px;
-                border: 1px solid #475569;
-                border-radius: 3px;
-                background-color: #151c28;
-            }
-            QCheckBox::indicator:checked {
-                background-color: #14b8a6;
-                border-color: #14b8a6;
-            }
-            """
-        )
+        self.setStyleSheet(theme.APP_STYLESHEET)

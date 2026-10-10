@@ -7,16 +7,17 @@ from typing import Any, Iterable
 
 from PySide6.QtCore import QThread, Signal
 
-from ..core.sr_engine import OnnxEngine, SuperResCancelled
+from ..core.sr_engine import OnnxEngine, SuperResCancelled, VulkanEngine
 from ..core.types import Backend, ModelMeta, VideoCodec
 from ..pipelines.image_pipeline import upscale_batch
 from ..pipelines.video_pipeline import upscale_video
 
 
-def _load_engine(backend: Backend, model: ModelMeta) -> OnnxEngine:
+def _load_engine(backend: Backend, model: ModelMeta) -> OnnxEngine | VulkanEngine:
     if backend == Backend.VULKAN:
-        raise RuntimeError("Vulkan 后端暂未就绪，请选择其他后端")
-    engine = OnnxEngine(backend)
+        engine = VulkanEngine(backend)
+    else:
+        engine = OnnxEngine(backend)
     engine.load_model(model)
     return engine
 
@@ -52,7 +53,7 @@ class ImageUpscaleWorker(QThread):
         self._backend = backend
         self._overwrite = bool(overwrite)
         self._cancel_event = threading.Event()
-        self._engine: OnnxEngine | None = None
+        self._engine: OnnxEngine | VulkanEngine | None = None
 
     def cancel(self) -> None:
         self._cancel_event.set()
@@ -105,7 +106,7 @@ class VideoUpscaleWorker(QThread):
         self._backend = backend
         self._codec = codec
         self._cancel_event = threading.Event()
-        self._engine: OnnxEngine | None = None
+        self._engine: OnnxEngine | VulkanEngine | None = None
 
     def cancel(self) -> None:
         self._cancel_event.set()
@@ -133,4 +134,3 @@ class VideoUpscaleWorker(QThread):
             self.cancelled.emit()
         except Exception as exc:
             self.error.emit(str(exc) or exc.__class__.__name__)
-
