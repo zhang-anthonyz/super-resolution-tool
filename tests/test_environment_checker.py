@@ -134,3 +134,74 @@ def test_check_environment_raises_without_discrete_gpu(monkeypatch):
         check_environment()
 
     assert exc_info.value.code == "NO_DISCRETE_GPU"
+
+
+def test_amd_integrated_name_detection():
+    from app.core.environment_checker import _is_amd_integrated_name
+
+    assert _is_amd_integrated_name("AMD Radeon(TM) Graphics") is True
+    assert _is_amd_integrated_name("AMD Radeon Graphics") is True
+    assert _is_amd_integrated_name("Radeon Vega 8 Graphics") is True
+    assert _is_amd_integrated_name("AMD Radeon RX 7900 XT") is False
+    assert _is_amd_integrated_name("Radeon Pro W6800") is False
+
+
+def test_classify_gpu_type_amd_igpu():
+    from app.core.environment_checker import _classify_gpu_type
+
+    # AMD 核显报告少量 dedicated（512MB），应判为核显
+    assert (
+        _classify_gpu_type(GpuVendor.AMD, "AMD Radeon(TM) Graphics", 509_374_464)
+        == GpuType.INTEGRATED
+    )
+    # AMD 独显
+    assert (
+        _classify_gpu_type(GpuVendor.AMD, "AMD Radeon RX 7900 XT", 21_413_277_696)
+        == GpuType.DISCRETE
+    )
+    # NVIDIA 独显
+    assert (
+        _classify_gpu_type(GpuVendor.NVIDIA, "NVIDIA GeForce RTX 4090", 24 * 1024**3)
+        == GpuType.DISCRETE
+    )
+    # Intel 核显
+    assert _classify_gpu_type(GpuVendor.INTEL, "Intel UHD Graphics", 0) == GpuType.INTEGRATED
+    # Intel 独显
+    assert (
+        _classify_gpu_type(GpuVendor.INTEL, "Intel Arc A770", 16 * 1024**3)
+        == GpuType.DISCRETE
+    )
+
+
+def test_dedupe_gpus():
+    from app.core.environment_checker import _dedupe_gpus
+
+    a = GpuInfo(
+        vendor=GpuVendor.AMD,
+        name="RX 7900 XT",
+        type=GpuType.DISCRETE,
+        dedicated_vram_bytes=21_413_277_696,
+        vendor_id=0x1002,
+        device_id=0x744C,
+    )
+    a_dup = GpuInfo(
+        vendor=GpuVendor.AMD,
+        name="RX 7900 XT",
+        type=GpuType.DISCRETE,
+        dedicated_vram_bytes=21_413_277_696,
+        vendor_id=0x1002,
+        device_id=0x744C,
+    )
+    igpu = GpuInfo(
+        vendor=GpuVendor.AMD,
+        name="Radeon Graphics",
+        type=GpuType.INTEGRATED,
+        dedicated_vram_bytes=0,
+        vendor_id=0x1002,
+        device_id=0x164E,
+    )
+
+    result = _dedupe_gpus([a, a_dup, igpu])
+    assert len(result) == 2
+    assert result[0].device_id == 0x744C
+    assert result[1].device_id == 0x164E

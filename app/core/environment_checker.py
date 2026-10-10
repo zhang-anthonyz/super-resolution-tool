@@ -265,12 +265,7 @@ def _detect_gpus_via_dxgi() -> list[GpuInfo]:
                 dedicated_bytes = int(desc.DedicatedVideoMemory)
                 vendor = _vendor_from_id(vendor_id)
 
-                if vendor == GpuVendor.INTEL and dedicated_bytes == 0 and _is_intel_discrete_name(name):
-                    gpu_type = GpuType.DISCRETE
-                elif dedicated_bytes > 0:
-                    gpu_type = GpuType.DISCRETE
-                else:
-                    gpu_type = GpuType.INTEGRATED
+                gpu_type = _classify_gpu_type(vendor, name, dedicated_bytes)
 
                 gpus.append(
                     GpuInfo(
@@ -294,6 +289,52 @@ def _is_intel_discrete_name(name: str) -> bool:
     lowered = name.lower()
     markers = ("arc", "iris xe max", "a770", "a750", "a580", "a380", "b580", "b570")
     return any(marker in lowered for marker in markers)
+
+
+def _is_amd_integrated_name(name: str) -> bool:
+    """判定是否为 AMD 核显名称。
+
+    AMD 核显（Ryzen APU）名称形如 "AMD Radeon(TM) Graphics"、"Radeon Vega 8 Graphics"，
+    不含具体产品型号；独显名称含 RX / Pro / FirePro / Instinct / R9 / R7 / HD 等型号标识。
+    """
+    lowered = name.lower()
+    if "radeon" not in lowered:
+        return False
+    discrete_markers = ("rx", "pro", "firepro", "instinct", " r9", " r7", " r5", " r3", " hd ")
+    if any(marker in lowered for marker in discrete_markers):
+        return False
+    return "graphics" in lowered
+
+
+def _classify_gpu_type(vendor: GpuVendor, name: str, dedicated_bytes: int) -> GpuType:
+    """统一判定显卡类型（独显/核显）。"""
+    if vendor == GpuVendor.NVIDIA:
+        # NVIDIA 无 x86 核显，dedicated > 0 即独显
+        return GpuType.DISCRETE if dedicated_bytes > 0 else GpuType.INTEGRATED
+    if vendor == GpuVendor.INTEL:
+        if dedicated_bytes > 0 or _is_intel_discrete_name(name):
+            return GpuType.DISCRETE
+        return GpuType.INTEGRATED
+    if vendor == GpuVendor.AMD:
+        # AMD 核显会报告少量 dedicated（BIOS 分配，常见 512MB），须靠名称区分
+        if _is_amd_integrated_name(name):
+            return GpuType.INTEGRATED
+        return GpuType.DISCRETE if dedicated_bytes > 0 else GpuType.INTEGRATED
+    # UNKNOWN（如 Microsoft Basic Render Driver）
+    return GpuType.DISCRETE if dedicated_bytes > 0 else GpuType.INTEGRATED
+
+
+def _dedupe_gpus(gpus: list[GpuInfo]) -> list[GpuInfo]:
+    """按 (vendor_id, device_id) 去重，避免 DXGI 对同一物理 GPU 重复枚举。"""
+    seen: set[tuple[int, int]] = set()
+    result: list[GpuInfo] = []
+    for gpu in gpus:
+        key = (gpu.vendor_id, gpu.device_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(gpu)
+    return result
 
 
 def _parse_pnp_vendor(pnp_device_id: str) -> Optional[int]:
@@ -354,12 +395,7 @@ def _detect_gpus_via_wmi() -> list[GpuInfo]:
         adapter_ram = int(item.get("AdapterRAM") or 0)
         vendor = _vendor_from_id(vendor_id)
         dedicated_bytes = adapter_ram
-        if vendor == GpuVendor.INTEL and dedicated_bytes == 0 and _is_intel_discrete_name(name):
-            gpu_type = GpuType.DISCRETE
-        elif dedicated_bytes > 0:
-            gpu_type = GpuType.DISCRETE
-        else:
-            gpu_type = GpuType.INTEGRATED
+        gpu_type = _classify_gpu_type(vendor, name, dedicated_bytes)
 
         gpus.append(
             GpuInfo(
@@ -447,6 +483,8 @@ def detect_gpus() -> list[GpuInfo]:
         except Exception:
             logger.warning("WMI 显卡枚举失败", exc_info=True)
             gpus = []
+
+    gpus = _dedupe_gpus(gpus)
 
     try:
         return _enrich_nvidia_gpus(gpus)
