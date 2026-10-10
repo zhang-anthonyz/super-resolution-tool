@@ -1,6 +1,6 @@
 # 运行时依赖（打包进 PyInstaller）
 # 核心
-numpy>=1.24,<2.0
+numpy>=1.24
 Pillow>=10.0
 PySide6>=6.5
 
@@ -13,3 +13,4 @@ nvidia-ml-py>=12.0
 
 # 开发/测试
 pytest>=7.0
+onnx>=1.16
