@@ -14,7 +14,12 @@ from typing import Iterable, Optional, Sequence
 
 from ..core.paths import app_root
 from ..core.types import Backend, GpuInfo, GpuVendor, ModelMeta, Scene
-from ..models.model_manager import builtin_models, scene_default
+from ..models.model_manager import (
+    builtin_models,
+    denoise_models,
+    registered_custom_models,
+    scene_default,
+)
 
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
@@ -90,7 +95,7 @@ def default_model_path(scene: Scene) -> Path:
 
 def model_for_name(name: str) -> Optional[ModelMeta]:
     """Return a built-in model by registry name, if present."""
-    for model in builtin_models():
+    for model in [*builtin_models(), *denoise_models(), *registered_custom_models()]:
         if model.name == name:
             return model
     return None
@@ -99,7 +104,7 @@ def model_for_name(name: str) -> Optional[ModelMeta]:
 def model_for_path(model_path: str | Path) -> Optional[ModelMeta]:
     """Return a built-in model matching a model file path, if present."""
     path_name = Path(model_path).name.lower()
-    for model in builtin_models():
+    for model in [*builtin_models(), *registered_custom_models()]:
         if Path(model.model_path).name.lower() == path_name:
             return model
     return None
@@ -122,6 +127,43 @@ def model_options() -> list[tuple[str, str]]:
         (model.name, f"{scene_label(model.scene)} · {model.description}")
         for model in builtin_models()
     ]
+
+
+def all_model_options() -> list[tuple[str, str]]:
+    """Return built-in plus user-imported model options for the UI dropdown."""
+    options = model_options()
+    options.extend(
+        (model.name, f"自定义 · {scene_label(model.scene)} · {model.description}")
+        for model in registered_custom_models()
+        if model.name
+    )
+    return options
+
+
+def all_denoise_options() -> list[tuple[str, str]]:
+    """Return denoise model name/display pairs for the denoise dropdown."""
+    return [(model.name, model.description) for model in denoise_models()]
+
+
+def denoise_summary(model: ModelMeta, strength: float) -> str:
+    """Human-readable description of how a denoise request will be served.
+
+    Replaces the old "无" placeholder, which claimed denoise was off even when
+    the built-in output filter still ran.
+    """
+    strength = max(0.0, min(1.0, float(strength)))
+    if strength <= 0.0:
+        return "关闭"
+    pair = getattr(model, "denoise_pair_path", None)
+    if pair is None:
+        return f"内置边缘保持 {strength:.2f}"
+    pair_scale = getattr(model, "denoise_pair_scale", None)
+    pair_name = Path(pair).stem
+    if pair_scale == 1:
+        return f"{pair_name} 预降噪 {strength:.2f}"
+    if pair_scale is None or pair_scale == model.scale:
+        return f"{pair_name} 同倍率插值 {strength:.2f}"
+    return f"倍率不匹配，回退内置 {strength:.2f}"
 
 
 def supported_model_formats() -> str:
@@ -179,6 +221,7 @@ def build_model_meta(
     backend: Backend,
     fixed_scale: Optional[int] = None,
     denoise_pair_path: Optional[Path] = None,
+    denoise_pair_scale: Optional[int] = None,
 ) -> ModelMeta:
     """Build a runtime model descriptor for the selected UI settings."""
     path = resolve_project_path(model_path)
@@ -191,6 +234,7 @@ def build_model_meta(
         backend=backend,
         model_path=path,
         denoise_pair_path=denoise_pair_path,
+        denoise_pair_scale=denoise_pair_scale,
         input_name="input",
         output_name="output",
         scale_input=None,
@@ -288,6 +332,12 @@ def video_8bit_notice() -> str:
 def progress_bar_value(current: float) -> int:
     """Round a possibly fractional progress value for a QProgressBar."""
     return int(math.floor(float(current) + 0.5))
+
+
+def running_progress_value(percent: float) -> int:
+    """Map task percent to a 0..1000 bar value without showing final 100%."""
+    value = progress_bar_value(float(percent) * 10.0)
+    return max(0, min(990, value))
 
 
 def format_log_line(

@@ -6,15 +6,15 @@ from pathlib import Path
 from typing import Optional, Sequence
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QTextCharFormat, QTextCursor
+from PySide6.QtGui import QColor, QFont, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (
     QApplication,
+    QButtonGroup,
     QCheckBox,
-    QComboBox,
     QFileDialog,
     QFormLayout,
     QFrame,
-    QGroupBox,
+    QGraphicsDropShadowEffect,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -27,14 +27,16 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSpinBox,
-    QTabWidget,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from ..core.backend_selector import BackendSelector
+from ..core.app_settings import load_settings, save_settings
 from ..core.environment_checker import available_backends
 from ..core.types import (
+    Backend,
     GpuInfo,
     ProgressInfo,
     SuperResResult,
@@ -45,14 +47,15 @@ from . import ui_logic
 from . import theme
 from .ui_logic import BackendChoice
 from .model_selector import ModelSelector
+from .widgets import ChevronComboBox
 from .workers import ImageUpscaleWorker, VideoUpscaleWorker
 
 
-_PROGRESS_CHUNK_QSS = "QProgressBar::chunk { background-color: %s; border-radius: 4px; }"
-_PROGRESS_COLOR_SUCCESS = "#16A34A"
-_PROGRESS_COLOR_ERROR = "#DC2626"
-_PROGRESS_COLOR_PARTIAL = "#D97706"
-_PROGRESS_COLOR_CANCELLED = "#9CA3AF"
+_PROGRESS_CHUNK_QSS = "QProgressBar::chunk { background-color: %s; border-radius: 5px; }"
+_PROGRESS_COLOR_SUCCESS = theme.SUCCESS
+_PROGRESS_COLOR_ERROR = theme.DANGER
+_PROGRESS_COLOR_PARTIAL = theme.WARNING
+_PROGRESS_COLOR_CANCELLED = theme.NEUTRAL
 
 
 VIDEO_CODEC_OPTIONS: tuple[tuple[VideoCodec, str], ...] = (
@@ -70,7 +73,7 @@ class ScaleSelector(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
 
-        self.combo = QComboBox()
+        self.combo = ChevronComboBox()
         self.combo.addItem("2x", 2)
         self.combo.addItem("3x", 3)
         self.combo.addItem("4x", 4)
@@ -108,33 +111,41 @@ class ScaleSelector(QWidget):
         return self.custom_spin.value() if selected is None else int(selected)
 
 
-class LogPanel(QWidget):
-    """Timestamped, color-coded, copyable log panel."""
+class LogPanel(QFrame):
+    """Timestamped, color-coded, copyable log card."""
 
     LEVEL_COLORS = {key: QColor(value) for key, value in theme.LOG_LEVEL_COLORS.items()}
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
+        self.setObjectName("card")
+
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(6)
+        layout.setContentsMargins(18, 16, 18, 18)
+        layout.setSpacing(12)
+
+        header = QHBoxLayout()
+        header.setSpacing(8)
+        title = QLabel("运行日志")
+        title.setObjectName("cardTitle")
+        header.addWidget(title)
+        header.addStretch(1)
+        copy_button = QPushButton("复制")
+        copy_button.setObjectName("ghostButton")
+        clear_button = QPushButton("清空")
+        clear_button.setObjectName("ghostButton")
+        copy_button.clicked.connect(self.copy_to_clipboard)
+        clear_button.clicked.connect(self.clear)
+        header.addWidget(copy_button)
+        header.addWidget(clear_button)
+        layout.addLayout(header)
 
         self.text_edit = QPlainTextEdit()
+        self.text_edit.setObjectName("logView")
         self.text_edit.setReadOnly(True)
         self.text_edit.setMaximumBlockCount(5000)
         self.text_edit.setPlaceholderText("运行日志会显示在这里")
-
-        button_row = QHBoxLayout()
-        button_row.addStretch(1)
-        copy_button = QPushButton("复制日志")
-        clear_button = QPushButton("清空")
-        copy_button.clicked.connect(self.copy_to_clipboard)
-        clear_button.clicked.connect(self.clear)
-        button_row.addWidget(copy_button)
-        button_row.addWidget(clear_button)
-
-        layout.addWidget(self.text_edit)
-        layout.addLayout(button_row)
+        layout.addWidget(self.text_edit, 1)
 
     def append(self, level: str, message: str) -> None:
         text = ui_logic.format_log_line(level, message) + "\n"
@@ -152,7 +163,7 @@ class LogPanel(QWidget):
     @classmethod
     def _format_for_level(cls, level: str) -> QTextCharFormat:
         fmt = QTextCharFormat()
-        fmt.setForeground(cls.LEVEL_COLORS.get(level, QColor("#e5e7eb")))
+        fmt.setForeground(cls.LEVEL_COLORS.get(level, QColor(theme.TEXT_SECONDARY)))
         return fmt
 
 
@@ -175,80 +186,307 @@ class MainWindow(QMainWindow):
         self._image_progress_last_percent = -1.0
         self._video_progress_last_time = 0.0
         self._video_progress_last_frame = -1
+        self._settings = load_settings()
 
-        self.setWindowTitle("Super Resolution Tool")
-        self.resize(1120, 820)
-        self.setMinimumSize(860, 640)
+        self.setWindowTitle("Super Resolution Tool · 本地超分工作台")
+        self.resize(1240, 840)
+        self.setMinimumSize(1000, 680)
         self._build_ui()
         self._connect_signals()
         self._apply_style()
+        self._apply_saved_settings()
+
+    #: Page title/subtitle shown in the top header, indexed like the nav rail.
+    PAGE_META: tuple[tuple[str, str], ...] = (
+        ("图片超分", "单张或批量图片超分 · 支持 jpg / png / webp"),
+        ("视频超分", "逐帧超分与硬件编码 · 仅支持 8bit SDR"),
+        ("设置", "推理设备信息与自定义模型管理"),
+    )
+
+    #: Grouped navigation entries, in page order.
+    NAV_SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
+        ("工作台", ("图片超分", "视频超分")),
+        ("系统", ("设置",)),
+    )
 
     def _build_ui(self) -> None:
         root = QWidget()
-        root_layout = QVBoxLayout(root)
-        root_layout.setContentsMargins(18, 18, 18, 18)
-        root_layout.setSpacing(14)
+        root.setObjectName("appRoot")
+        root_layout = QHBoxLayout(root)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
+        root_layout.addWidget(self._build_sidebar())
+        root_layout.addWidget(self._build_content(), 1)
+        self.setCentralWidget(root)
+
+    # ------------------------------------------------------------- sidebar --
+    def _build_sidebar(self) -> QWidget:
+        sidebar = QFrame()
+        sidebar.setObjectName("sidebar")
+        sidebar.setFixedWidth(236)
+
+        layout = QVBoxLayout(sidebar)
+        layout.setContentsMargins(16, 22, 16, 16)
+        layout.setSpacing(16)
+
+        brand = QHBoxLayout()
+        brand.setSpacing(10)
+        mark = QLabel("SR")
+        mark.setObjectName("brandMark")
+        mark.setFixedSize(38, 38)
+        mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        brand_text = QVBoxLayout()
+        brand_text.setSpacing(1)
+        brand_title = QLabel("Super Resolution")
+        brand_title.setObjectName("brandTitle")
+        brand_subtitle = QLabel("本地超分工作台")
+        brand_subtitle.setObjectName("brandSubtitle")
+        brand_text.addWidget(brand_title)
+        brand_text.addWidget(brand_subtitle)
+        brand.addWidget(mark)
+        brand.addLayout(brand_text)
+        brand.addStretch(1)
+        layout.addLayout(brand)
+
+        self.nav_group = QButtonGroup(self)
+        self.nav_group.setExclusive(True)
+        self._nav_buttons: list[QPushButton] = []
+        page_index = 0
+        for section, titles in self.NAV_SECTIONS:
+            section_label = QLabel(section)
+            section_label.setObjectName("navSection")
+            layout.addWidget(section_label)
+            for title in titles:
+                button = QPushButton(title)
+                button.setObjectName("navButton")
+                button.setCheckable(True)
+                button.setCursor(Qt.CursorShape.PointingHandCursor)
+                button.setMinimumHeight(38)
+                button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+                self.nav_group.addButton(button, page_index)
+                self._nav_buttons.append(button)
+                layout.addWidget(button)
+                page_index += 1
+        self.nav_group.idClicked.connect(self._set_page)
+
+        layout.addStretch(1)
+        layout.addWidget(self._build_sidebar_footer())
+        return sidebar
+
+    def _build_sidebar_footer(self) -> QWidget:
+        footer = QFrame()
+        footer.setObjectName("sidebarFooter")
+        layout = QVBoxLayout(footer)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(3)
+        for text in ("本地离线推理", "不上传任何图片 / 视频"):
+            line = QLabel(text)
+            line.setObjectName("sidebarFooterText")
+            layout.addWidget(line)
+        return footer
+
+    # ------------------------------------------------------------- content --
+    def _build_content(self) -> QWidget:
+        content = QWidget()
+        content.setObjectName("contentArea")
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(24, 22, 24, 22)
+        layout.setSpacing(16)
+
+        layout.addWidget(self._build_header())
+
+        self.stack = QStackedWidget()
+        self.image_tab = self._build_image_tab()
+        self.video_tab = self._build_video_tab()
+        self.settings_tab = self._build_settings_tab()
+        self.stack.addWidget(self.image_tab)
+        self.stack.addWidget(self.video_tab)
+        self.stack.addWidget(self.settings_tab)
+        layout.addWidget(self.stack, 1)
+        self._set_page(0)
+        return content
+
+    def _build_header(self) -> QWidget:
+        card = QFrame()
+        card.setObjectName("headerCard")
+        shadow = QGraphicsDropShadowEffect(card)
+        shadow.setBlurRadius(26)
+        shadow.setOffset(0, 5)
+        shadow.setColor(QColor(15, 23, 42, 24))
+        card.setGraphicsEffect(shadow)
+
+        layout = QHBoxLayout(card)
+        layout.setContentsMargins(22, 18, 22, 18)
+        layout.setSpacing(20)
+
+        text_column = QVBoxLayout()
+        text_column.setSpacing(3)
+        self.header_title = QLabel(self.PAGE_META[0][0])
+        self.header_title.setObjectName("headerTitle")
+        self.header_subtitle = QLabel(self.PAGE_META[0][1])
+        self.header_subtitle.setObjectName("headerSubtitle")
+        text_column.addWidget(self.header_title)
+        text_column.addWidget(self.header_subtitle)
+        layout.addLayout(text_column, 1)
 
         self.gpu_label = QLabel(ui_logic.gpu_summary(self.gpu, self.available))
         self.gpu_label.setObjectName("gpuInfoLabel")
         self.gpu_label.setWordWrap(True)
-        root_layout.addWidget(self.gpu_label)
+        self.gpu_label.setMaximumWidth(400)
+        layout.addWidget(self.gpu_label, 0, Qt.AlignmentFlag.AlignVCenter)
+        return card
 
-        self.tabs = QTabWidget()
-        self.settings_tab = self._build_settings_tab()
-        self.image_tab = self._build_image_tab()
-        self.video_tab = self._build_video_tab()
-        self.tabs.addTab(self.image_tab, "图片超分")
-        self.tabs.addTab(self.video_tab, "视频超分")
-        self.tabs.addTab(self.settings_tab, "设置")
-        root_layout.addWidget(self.tabs, 1)
-        self.setCentralWidget(root)
+    def _set_page(self, index: int) -> None:
+        """Switch the visible page and keep header + nav rail in sync."""
+        self.stack.setCurrentIndex(index)
+        title, subtitle = self.PAGE_META[index]
+        self.header_title.setText(title)
+        self.header_subtitle.setText(subtitle)
+        self._nav_buttons[index].setChecked(True)
 
-    def _build_settings_tab(self) -> QWidget:
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(14)
-
-        gpu_group = QGroupBox("检测到的显卡")
-        gpu_layout = QVBoxLayout(gpu_group)
-        self.gpu_detail_label = QLabel(ui_logic.gpu_summary(self.gpu, self.available))
-        self.gpu_detail_label.setWordWrap(True)
-        gpu_layout.addWidget(self.gpu_detail_label)
-        layout.addWidget(gpu_group)
-
-        import_group = QGroupBox("自定义模型导入")
-        import_layout = QVBoxLayout(import_group)
-        self.import_model_button = QPushButton("导入 ONNX 模型到模型库")
-        self.import_model_button.clicked.connect(self._import_custom_model)
-        self.import_model_status = QLabel("可导入自定义 ONNX 模型，随后在各任务 Tab 中选择“自定义模型”")
-        self.import_model_status.setObjectName("mutedLabel")
-        self.import_model_status.setWordWrap(True)
-        import_layout.addWidget(self.import_model_button)
-        import_layout.addWidget(self.import_model_status)
-        layout.addWidget(import_group)
-        layout.addStretch(1)
-        return page
-
-    def _build_image_tab(self) -> QWidget:
+    # --------------------------------------------------------- card helpers --
+    def _make_scroll_page(self) -> tuple[QScrollArea, QVBoxLayout]:
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.viewport().setAutoFillBackground(False)
 
-        content = QWidget()
-        layout = QVBoxLayout(content)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(12)
+        page = QWidget()
+        page.setObjectName("pageBody")
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(2, 2, 8, 2)
+        layout.setSpacing(14)
+        scroll.setWidget(page)
+        return scroll, layout
 
-        input_group = QGroupBox("输入图片")
-        input_layout = QVBoxLayout(input_group)
+    def _make_card(self, title: str, hint: str = "") -> tuple[QFrame, QVBoxLayout]:
+        """Create a white card with a title row, divider and body layout."""
+        card = QFrame()
+        card.setObjectName("card")
+
+        outer = QVBoxLayout(card)
+        outer.setContentsMargins(18, 16, 18, 18)
+        outer.setSpacing(13)
+
+        header = QHBoxLayout()
+        header.setSpacing(10)
+        title_label = QLabel(title)
+        title_label.setObjectName("cardTitle")
+        header.addWidget(title_label)
+        if hint:
+            hint_label = QLabel(hint)
+            hint_label.setObjectName("cardHint")
+            header.addWidget(hint_label)
+        header.addStretch(1)
+        outer.addLayout(header)
+
+        divider = QFrame()
+        divider.setObjectName("cardDivider")
+        divider.setFixedHeight(1)
+        outer.addWidget(divider)
+
+        body = QVBoxLayout()
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(12)
+        outer.addLayout(body)
+        return card, body
+
+    def _make_form(self) -> QFormLayout:
+        form = QFormLayout()
+        form.setLabelAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+        form.setVerticalSpacing(10)
+        form.setHorizontalSpacing(16)
+        form.setContentsMargins(0, 0, 0, 0)
+        return form
+
+    def _form_label(self, text: str) -> QLabel:
+        label = QLabel(text)
+        label.setObjectName("fieldLabel")
+        return label
+
+    def _value_label(self, text: str, strong: bool = False) -> QLabel:
+        label = QLabel(text)
+        if strong:
+            label.setObjectName("valueStrong")
+        label.setWordWrap(True)
+        return label
+
+    def _build_settings_tab(self) -> QWidget:
+        scroll, layout = self._make_scroll_page()
+
+        device_card, device_body = self._make_card("推理设备", "启动时自动检测")
+        device_form = self._make_form()
+        device_form.addRow(
+            self._form_label("显卡厂商"),
+            self._value_label(ui_logic.VENDOR_LABELS.get(self.gpu.vendor, "未知厂商")),
+        )
+        device_form.addRow(
+            self._form_label("显卡型号"),
+            self._value_label(self.gpu.name, strong=True),
+        )
+        device_form.addRow(
+            self._form_label("独立显存"),
+            self._value_label(f"{self.gpu.dedicated_vram_gb:.1f} GB"),
+        )
+        device_form.addRow(
+            self._form_label("可用后端"),
+            self._value_label(self._available_backend_text(), strong=True),
+        )
+        device_body.addLayout(device_form)
+        layout.addWidget(device_card)
+
+        import_card, import_body = self._make_card(
+            "自定义模型",
+            "导入 ONNX 模型后可在此后各任务中选用",
+        )
+        self.import_model_button = QPushButton("导入 ONNX 模型到模型库")
+        self.import_model_button.setObjectName("softButton")
+        self.import_model_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.import_model_button.clicked.connect(self._import_custom_model)
+        self.import_model_status = QLabel("尚未导入自定义模型")
+        self.import_model_status.setObjectName("mutedLabel")
+        self.import_model_status.setWordWrap(True)
+        import_body.addWidget(self.import_model_button, 0, Qt.AlignmentFlag.AlignLeft)
+        import_body.addWidget(self.import_model_status)
+        layout.addWidget(import_card)
+
+        about_card, about_body = self._make_card("关于")
+        for text in (
+            "推理后端：ONNX Runtime（CUDA / DirectML / OpenVINO）与 ncnn Vulkan",
+            "视频编码：内置 ffmpeg，支持 H.264 / HEVC 硬件编码",
+            "隐私：全部处理在本地完成，不联网、不上传素材",
+        ):
+            about_body.addWidget(self._value_label(text))
+        layout.addWidget(about_card)
+        layout.addStretch(1)
+        return scroll
+
+    def _available_backend_text(self) -> str:
+        labels = [
+            choice.display_label
+            for choice in ui_logic.backend_choices(self.gpu, self.available)
+            if choice.available
+        ]
+        return "、".join(labels) or "无可用后端"
+
+    def _build_image_tab(self) -> QWidget:
+        scroll, layout = self._make_scroll_page()
+
+        input_card, input_body = self._make_card("输入图片", "支持 jpg / png / webp，可批量加入")
         self.image_list = QListWidget()
         self.image_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
-        self.image_list.setMinimumHeight(140)
+        self.image_list.setMinimumHeight(150)
         input_buttons = QHBoxLayout()
+        input_buttons.setSpacing(8)
         self.image_add_files_button = QPushButton("添加文件")
+        self.image_add_files_button.setObjectName("softButton")
         self.image_add_folder_button = QPushButton("添加文件夹")
+        self.image_add_folder_button.setObjectName("softButton")
         self.image_remove_button = QPushButton("移除选中")
+        self.image_remove_button.setObjectName("ghostButton")
         self.image_add_files_button.clicked.connect(self._add_image_files)
         self.image_add_folder_button.clicked.connect(self._add_image_folder)
         self.image_remove_button.clicked.connect(self._remove_selected_images)
@@ -256,81 +494,100 @@ class MainWindow(QMainWindow):
         input_buttons.addWidget(self.image_add_folder_button)
         input_buttons.addWidget(self.image_remove_button)
         input_buttons.addStretch(1)
-        input_layout.addWidget(self.image_list, 1)
-        input_layout.addLayout(input_buttons)
-        layout.addWidget(input_group)
+        for button in (
+            self.image_add_files_button,
+            self.image_add_folder_button,
+            self.image_remove_button,
+        ):
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+        input_body.addWidget(self.image_list, 1)
+        input_body.addLayout(input_buttons)
+        layout.addWidget(input_card)
 
+        model_card, model_body = self._make_card(
+            "模型与后端",
+            "场景预设自动匹配模型；降噪模型可选独立降噪网络，留空则用内置边缘保持降噪",
+        )
         self.image_scale_selector = ScaleSelector()
         self.image_model_selector = ModelSelector(
             self.backend_options,
-            parent=content,
+            parent=model_card,
             scale_selector=self.image_scale_selector,
         )
-        layout.addWidget(self.image_model_selector)
+        model_body.addWidget(self.image_model_selector)
+        layout.addWidget(model_card)
 
-        output_group = QGroupBox("输出与倍率")
-        output_form = QFormLayout(output_group)
-        output_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        output_card, output_body = self._make_card("输出与画质")
+        output_form = self._make_form()
         self.image_output_dir_edit = QLineEdit(str(ui_logic.app_root() / "output"))
         output_row = QWidget()
         output_layout = QHBoxLayout(output_row)
         output_layout.setContentsMargins(0, 0, 0, 0)
+        output_layout.setSpacing(8)
         output_layout.addWidget(self.image_output_dir_edit, 1)
         self.image_output_button = QPushButton("浏览")
+        self.image_output_button.setObjectName("softButton")
+        self.image_output_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.image_output_button.clicked.connect(self._browse_image_output)
         output_layout.addWidget(self.image_output_button)
         self.image_overwrite_check = QCheckBox("覆盖已存在文件")
-        output_form.addRow("输出目录", output_row)
-        output_form.addRow("倍率", self.image_scale_selector)
-        output_form.addRow("", self.image_overwrite_check)
-        layout.addWidget(output_group)
+        self.image_resize_mode_combo = ChevronComboBox()
+        self.image_resize_mode_combo.addItem("保持超分尺寸", "keep")
+        self.image_resize_mode_combo.addItem("回缩到原图尺寸", "restore")
+        self.image_compression_combo = ChevronComboBox()
+        self.image_compression_combo.addItem("高质量", "high")
+        self.image_compression_combo.addItem("高压缩", "compressed")
+        self.image_compression_combo.addItem("无损 / 最高质量", "lossless")
+        output_form.addRow(self._form_label("输出目录"), output_row)
+        output_form.addRow(self._form_label("倍率"), self.image_scale_selector)
+        output_form.addRow(self._form_label("输出尺寸"), self.image_resize_mode_combo)
+        output_form.addRow(self._form_label("输出压缩"), self.image_compression_combo)
+        output_form.addRow(self._form_label(""), self.image_overwrite_check)
+        output_body.addLayout(output_form)
+        layout.addWidget(output_card)
 
-        run_group = QGroupBox("任务")
-        run_layout = QVBoxLayout(run_group)
+        run_card, run_body = self._make_card("任务", "运行中可随时取消")
         self.image_progress = QProgressBar()
-        self.image_progress.setRange(0, 100)
+        self.image_progress.setRange(0, 1000)
         self.image_progress.setValue(0)
+        self.image_progress.setTextVisible(False)
         self.image_status = QLabel("就绪")
-        self.image_status.setObjectName("mutedLabel")
+        self.image_status.setObjectName("statusLabel")
         controls = QHBoxLayout()
-        self.image_start_button = QPushButton("开始")
+        controls.setSpacing(8)
+        self.image_start_button = QPushButton("开始超分")
         self.image_start_button.setObjectName("primaryButton")
+        self.image_start_button.setMinimumWidth(118)
+        self.image_start_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.image_cancel_button = QPushButton("取消")
+        self.image_cancel_button.setObjectName("cancelButton")
         self.image_cancel_button.setEnabled(False)
-        controls.addWidget(self.image_start_button)
+        controls.addWidget(self.image_status, 1)
         controls.addWidget(self.image_cancel_button)
-        controls.addStretch(1)
-        run_layout.addWidget(self.image_progress)
-        run_layout.addWidget(self.image_status)
-        run_layout.addLayout(controls)
-        layout.addWidget(run_group)
+        controls.addWidget(self.image_start_button)
+        run_body.addWidget(self.image_progress)
+        run_body.addLayout(controls)
+        layout.addWidget(run_card)
 
         self.image_log = LogPanel()
-        self.image_log.setMinimumHeight(120)
+        self.image_log.setMinimumHeight(158)
         layout.addWidget(self.image_log)
-
-        scroll.setWidget(content)
         return scroll
 
     def _build_video_tab(self) -> QWidget:
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll, layout = self._make_scroll_page()
 
-        content = QWidget()
-        layout = QVBoxLayout(content)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(12)
-
-        input_group = QGroupBox("输入视频")
-        input_form = QFormLayout(input_group)
-        input_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        input_card, input_body = self._make_card("输入视频", ui_logic.video_8bit_notice())
+        input_form = self._make_form()
         self.video_input_edit = QLineEdit()
         video_input_row = QWidget()
         video_input_layout = QHBoxLayout(video_input_row)
         video_input_layout.setContentsMargins(0, 0, 0, 0)
+        video_input_layout.setSpacing(8)
         video_input_layout.addWidget(self.video_input_edit, 1)
         self.video_input_button = QPushButton("浏览")
+        self.video_input_button.setObjectName("softButton")
+        self.video_input_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.video_input_button.clicked.connect(self._browse_video_input)
         video_input_layout.addWidget(self.video_input_button)
 
@@ -338,65 +595,70 @@ class MainWindow(QMainWindow):
         video_output_row = QWidget()
         video_output_layout = QHBoxLayout(video_output_row)
         video_output_layout.setContentsMargins(0, 0, 0, 0)
+        video_output_layout.setSpacing(8)
         video_output_layout.addWidget(self.video_output_dir_edit, 1)
         self.video_output_button = QPushButton("浏览")
+        self.video_output_button.setObjectName("softButton")
+        self.video_output_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.video_output_button.clicked.connect(self._browse_video_output)
         video_output_layout.addWidget(self.video_output_button)
 
-        input_form.addRow("视频文件", video_input_row)
-        input_form.addRow("输出目录", video_output_row)
+        input_form.addRow(self._form_label("视频文件"), video_input_row)
+        input_form.addRow(self._form_label("输出目录"), video_output_row)
+        input_body.addLayout(input_form)
+        layout.addWidget(input_card)
 
-        self.video_8bit_label = QLabel(ui_logic.video_8bit_notice())
-        self.video_8bit_label.setObjectName("mutedLabel")
-        self.video_8bit_label.setWordWrap(True)
-        input_form.addRow("", self.video_8bit_label)
-        layout.addWidget(input_group)
-
+        model_card, model_body = self._make_card(
+            "模型与后端",
+            "逐帧超分，模型与图片任务共用；降噪模型可独立选择",
+        )
         self.video_scale_selector = ScaleSelector()
         self.video_model_selector = ModelSelector(
             self.backend_options,
-            parent=content,
+            parent=model_card,
             scale_selector=self.video_scale_selector,
         )
-        layout.addWidget(self.video_model_selector)
+        model_body.addWidget(self.video_model_selector)
+        layout.addWidget(model_card)
 
-        output_group = QGroupBox("输出与倍率")
-        output_form = QFormLayout(output_group)
-        output_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
-        self.video_codec_combo = QComboBox()
+        output_card, output_body = self._make_card("输出与编码")
+        output_form = self._make_form()
+        self.video_codec_combo = ChevronComboBox()
         for codec, label in VIDEO_CODEC_OPTIONS:
             self.video_codec_combo.addItem(label, codec)
         self.video_overwrite_check = QCheckBox("覆盖已存在文件")
-        output_form.addRow("编码器", self.video_codec_combo)
-        output_form.addRow("倍率", self.video_scale_selector)
-        output_form.addRow("", self.video_overwrite_check)
-        layout.addWidget(output_group)
+        output_form.addRow(self._form_label("编码器"), self.video_codec_combo)
+        output_form.addRow(self._form_label("倍率"), self.video_scale_selector)
+        output_form.addRow(self._form_label(""), self.video_overwrite_check)
+        output_body.addLayout(output_form)
+        layout.addWidget(output_card)
 
-        run_group = QGroupBox("任务")
-        run_layout = QVBoxLayout(run_group)
+        run_card, run_body = self._make_card("任务", "运行中可随时取消")
         self.video_progress = QProgressBar()
-        self.video_progress.setRange(0, 100)
+        self.video_progress.setRange(0, 1000)
         self.video_progress.setValue(0)
+        self.video_progress.setTextVisible(False)
         self.video_status = QLabel("就绪")
-        self.video_status.setObjectName("mutedLabel")
+        self.video_status.setObjectName("statusLabel")
         controls = QHBoxLayout()
-        self.video_start_button = QPushButton("开始")
+        controls.setSpacing(8)
+        self.video_start_button = QPushButton("开始超分")
         self.video_start_button.setObjectName("primaryButton")
+        self.video_start_button.setMinimumWidth(118)
+        self.video_start_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.video_cancel_button = QPushButton("取消")
+        self.video_cancel_button.setObjectName("cancelButton")
         self.video_cancel_button.setEnabled(False)
-        controls.addWidget(self.video_start_button)
+        controls.addWidget(self.video_status, 1)
         controls.addWidget(self.video_cancel_button)
-        controls.addStretch(1)
-        run_layout.addWidget(self.video_progress)
-        run_layout.addWidget(self.video_status)
-        run_layout.addLayout(controls)
-        layout.addWidget(run_group)
+        controls.addWidget(self.video_start_button)
+        run_body.addWidget(self.video_progress)
+        run_body.addLayout(controls)
+        layout.addWidget(run_card)
 
         self.video_log = LogPanel()
-        self.video_log.setMinimumHeight(120)
+        self.video_log.setMinimumHeight(158)
         layout.addWidget(self.video_log)
-
-        scroll.setWidget(content)
         return scroll
 
     def _connect_signals(self) -> None:
@@ -404,6 +666,91 @@ class MainWindow(QMainWindow):
         self.image_cancel_button.clicked.connect(self.cancel_image_upscale)
         self.video_start_button.clicked.connect(self.start_video_upscale)
         self.video_cancel_button.clicked.connect(self.cancel_video_upscale)
+
+    def _apply_saved_settings(self) -> None:
+        image_output = self._settings.get("image_output_dir")
+        if isinstance(image_output, str) and image_output:
+            self.image_output_dir_edit.setText(image_output)
+        video_output = self._settings.get("video_output_dir")
+        if isinstance(video_output, str) and video_output:
+            self.video_output_dir_edit.setText(video_output)
+        self.image_overwrite_check.setChecked(
+            bool(self._settings.get("image_overwrite", False))
+        )
+        self.video_overwrite_check.setChecked(
+            bool(self._settings.get("video_overwrite", False))
+        )
+        image_resize_mode = str(self._settings.get("image_resize_mode") or "keep")
+        resize_index = self.image_resize_mode_combo.findData(image_resize_mode)
+        if resize_index >= 0:
+            self.image_resize_mode_combo.setCurrentIndex(resize_index)
+        compression_profile = str(
+            self._settings.get("image_compression_profile") or "high"
+        )
+        compression_index = self.image_compression_combo.findData(
+            compression_profile
+        )
+        if compression_index >= 0:
+            self.image_compression_combo.setCurrentIndex(compression_index)
+        codec_value = str(self._settings.get("video_codec") or "")
+        if codec_value:
+            try:
+                index = self.video_codec_combo.findData(VideoCodec(codec_value.lower()))
+            except ValueError:
+                index = -1
+            if index >= 0:
+                self.video_codec_combo.setCurrentIndex(index)
+
+        try:
+            image_backend = Backend(str(self._settings.get("image_backend") or ""))
+            self.image_model_selector.set_backend(image_backend)
+        except ValueError:
+            pass
+        try:
+            video_backend = Backend(str(self._settings.get("video_backend") or ""))
+            self.video_model_selector.set_backend(video_backend)
+        except ValueError:
+            pass
+        try:
+            image_denoise = float(self._settings.get("image_denoise_strength", 0.0))
+            self.image_model_selector.set_denoise_strength(image_denoise)
+            image_sharpen = float(self._settings.get("image_sharpen_strength", 0.25))
+            self.image_model_selector.set_sharpen_strength(image_sharpen)
+            video_denoise = float(self._settings.get("video_denoise_strength", 0.0))
+            self.video_model_selector.set_denoise_strength(video_denoise)
+            video_sharpen = float(self._settings.get("video_sharpen_strength", 0.25))
+            self.video_model_selector.set_sharpen_strength(video_sharpen)
+        except (TypeError, ValueError):
+            pass
+
+        image_denoise_model = self._settings.get("image_denoise_model")
+        if isinstance(image_denoise_model, str) and image_denoise_model:
+            self.image_model_selector.set_denoise_model(image_denoise_model)
+        video_denoise_model = self._settings.get("video_denoise_model")
+        if isinstance(video_denoise_model, str) and video_denoise_model:
+            self.video_model_selector.set_denoise_model(video_denoise_model)
+
+    def _window_settings(self) -> dict[str, object]:
+        return {
+            "image_output_dir": self.image_output_dir_edit.text().strip(),
+            "video_output_dir": self.video_output_dir_edit.text().strip(),
+            "image_overwrite": self.image_overwrite_check.isChecked(),
+            "image_resize_mode": self.image_resize_mode_combo.currentData(),
+            "image_compression_profile": self.image_compression_combo.currentData(),
+            "video_overwrite": self.video_overwrite_check.isChecked(),
+            "video_codec": self.current_video_codec().value,
+            "image_backend": self.image_model_selector.current_backend().value,
+            "video_backend": self.video_model_selector.current_backend().value,
+            "image_denoise_strength": self.image_model_selector.denoise_strength(),
+            "image_sharpen_strength": self.image_model_selector.sharpen_strength(),
+            "video_denoise_strength": self.video_model_selector.denoise_strength(),
+            "video_sharpen_strength": self.video_model_selector.sharpen_strength(),
+            "image_denoise_model": self.image_model_selector.denoise_model_name(),
+            "video_denoise_model": self.video_model_selector.denoise_model_name(),
+        }
+
+    def _save_window_settings(self) -> None:
+        save_settings(self._window_settings())
 
     def current_video_codec(self) -> VideoCodec:
         codec = self.video_codec_combo.currentData()
@@ -419,14 +766,17 @@ class MainWindow(QMainWindow):
             self,
             "选择 ONNX 模型",
             str(ui_logic.app_root() / "models" / "onnx"),
-            ui_logic.supported_model_formats(),
+            "ONNX 模型 (*.onnx)",
         )
         if path:
-            library_dir = ui_logic.app_root() / "models" / "onnx"
-            selected_path = Path(path)
-            if selected_path.resolve().parent != library_dir.resolve():
-                selected_path = ui_logic.copy_model_to_library(selected_path)
-            self.import_model_status.setText(f"已导入：{selected_path}")
+            try:
+                meta = self.image_model_selector.import_and_register_model_from_path(path)
+                self.video_model_selector.refresh_models()
+                self.import_model_status.setText(
+                    f"已导入并注册：{meta.name} / {meta.model_path}"
+                )
+            except Exception as exc:
+                QMessageBox.warning(self, "导入失败", str(exc))
 
     def _add_image_files(self) -> None:
         paths, _ = QFileDialog.getOpenFileNames(
@@ -449,7 +799,8 @@ class MainWindow(QMainWindow):
         for path in files:
             if path in existing:
                 continue
-            item = QListWidgetItem(str(path))
+            item = QListWidgetItem(path.name)
+            item.setToolTip(str(path))
             item.setData(Qt.ItemDataRole.UserRole, str(path))
             self.image_list.addItem(item)
             existing.add(path)
@@ -501,17 +852,18 @@ class MainWindow(QMainWindow):
         bar.setStyleSheet("")
 
     def _reset_image_progress(self) -> None:
-        self.image_progress.setRange(0, 100)
+        self.image_progress.setRange(0, 1000)
         self.image_progress.setValue(0)
         self._reset_progress_color(self.image_progress)
 
     def _reset_video_progress(self) -> None:
-        self.video_progress.setRange(0, 100)
+        self.video_progress.setRange(0, 1000)
         self.video_progress.setValue(0)
         self._reset_progress_color(self.video_progress)
 
     def start_image_upscale(self) -> None:
-        if self._image_worker is not None and self._image_worker.isRunning():
+        if self._task_busy():
+            QMessageBox.information(self, "任务进行中", "请等待当前任务结束后再开始新任务")
             return
         paths = self._image_paths()
         if not paths:
@@ -532,6 +884,11 @@ class MainWindow(QMainWindow):
         model = self.image_model_selector.current_model()
         backend = self.image_model_selector.current_backend()
         denoise_strength = self.image_model_selector.denoise_strength()
+        sharpen_strength = self.image_model_selector.sharpen_strength()
+        resize_to_original = self.image_resize_mode_combo.currentData() == "restore"
+        compression_profile = str(
+            self.image_compression_combo.currentData() or "high"
+        )
         out_dir = ui_logic.resolve_project_path(out_dir_text)
         self._image_progress_key = None
         self._image_progress_last_time = 0.0
@@ -542,15 +899,12 @@ class MainWindow(QMainWindow):
             "Info",
             f"检测到显卡：{ui_logic.gpu_summary(self.gpu, self.available)}",
         )
-        denoise_text = (
-            f"{denoise_strength:.2f}"
-            if getattr(model, "denoise_pair_path", None)
-            else "无"
-        )
+        denoise_text = ui_logic.denoise_summary(model, denoise_strength)
         self.image_log.append(
             "Info",
             f"加载模型：{model.name} / {ui_logic.backend_label(backend, self.gpu)} / "
-            f"{scale}x / 降噪强度 {denoise_text}",
+            f"{scale}x / 降噪强度 {denoise_text} / "
+            f"边缘锐化 {sharpen_strength:.2f}",
         )
         self.image_log.append(
             "Info",
@@ -570,6 +924,9 @@ class MainWindow(QMainWindow):
             backend=backend,
             overwrite=self.image_overwrite_check.isChecked(),
             denoise_strength=denoise_strength,
+            sharpen_strength=sharpen_strength,
+            resize_to_original=resize_to_original,
+            compression_profile=compression_profile,
             parent=self,
         )
         worker.progress.connect(self._on_image_progress)
@@ -577,6 +934,7 @@ class MainWindow(QMainWindow):
         worker.error.connect(self._on_image_error)
         worker.cancelled.connect(self._on_image_cancelled)
         self._image_worker = worker
+        worker.runtime.connect(self._on_image_runtime)
         self._set_image_running(True)
         worker.start()
 
@@ -587,7 +945,8 @@ class MainWindow(QMainWindow):
             self.image_status.setText("正在取消...")
 
     def start_video_upscale(self) -> None:
-        if self._video_worker is not None and self._video_worker.isRunning():
+        if self._task_busy():
+            QMessageBox.information(self, "任务进行中", "请等待当前任务结束后再开始新任务")
             return
         input_text = self.video_input_edit.text().strip()
         if not input_text:
@@ -614,6 +973,7 @@ class MainWindow(QMainWindow):
         codec = self.current_video_codec()
         backend = self.video_model_selector.current_backend()
         denoise_strength = self.video_model_selector.denoise_strength()
+        sharpen_strength = self.video_model_selector.sharpen_strength()
         out_path = out_dir / f"{input_path.stem}_x{scale}.mp4"
 
         if out_path.exists() and not self.video_overwrite_check.isChecked():
@@ -632,15 +992,12 @@ class MainWindow(QMainWindow):
             "Info",
             f"检测到显卡：{ui_logic.gpu_summary(self.gpu, self.available)}",
         )
-        denoise_text = (
-            f"{denoise_strength:.2f}"
-            if getattr(model, "denoise_pair_path", None)
-            else "无"
-        )
+        denoise_text = ui_logic.denoise_summary(model, denoise_strength)
         self.video_log.append(
             "Info",
             f"加载模型：{model.name} / {ui_logic.backend_label(backend, self.gpu)} / "
-            f"{scale}x / 降噪强度 {denoise_text}",
+            f"{scale}x / 降噪强度 {denoise_text} / "
+            f"边缘锐化 {sharpen_strength:.2f}",
         )
         try:
             video_info = probe_video(input_path)
@@ -674,6 +1031,7 @@ class MainWindow(QMainWindow):
             backend=backend,
             codec=codec,
             denoise_strength=denoise_strength,
+            sharpen_strength=sharpen_strength,
             parent=self,
         )
         worker.progress.connect(self._on_video_progress)
@@ -681,6 +1039,7 @@ class MainWindow(QMainWindow):
         worker.error.connect(self._on_video_error)
         worker.cancelled.connect(self._on_video_cancelled)
         self._video_worker = worker
+        worker.runtime.connect(self._on_video_runtime)
         self._set_video_running(True)
         worker.start()
 
@@ -691,24 +1050,22 @@ class MainWindow(QMainWindow):
             self.video_status.setText("正在取消...")
 
     def _on_image_progress(self, info: ProgressInfo) -> None:
-        if info.total > 0:
-            self.image_progress.setRange(0, info.total)
-            self.image_progress.setValue(ui_logic.progress_bar_value(info.current))
-        else:
-            self.image_progress.setRange(0, 100)
-            self.image_progress.setValue(0)
+        self.image_progress.setRange(0, 1000)
+        self.image_progress.setValue(ui_logic.running_progress_value(info.percent))
         self.image_status.setText(info.message)
         self._log_image_progress(info)
 
+    def _on_image_runtime(self, label: str) -> None:
+        self.image_log.append("Info", f"实际推理后端：{label}")
+
     def _on_video_progress(self, info: ProgressInfo) -> None:
-        if info.total > 0:
-            self.video_progress.setRange(0, info.total)
-            self.video_progress.setValue(ui_logic.progress_bar_value(info.current))
-        else:
-            self.video_progress.setRange(0, 100)
-            self.video_progress.setValue(0)
+        self.video_progress.setRange(0, 1000)
+        self.video_progress.setValue(ui_logic.running_progress_value(info.percent))
         self.video_status.setText(info.message)
         self._log_video_progress(info)
+
+    def _on_video_runtime(self, label: str) -> None:
+        self.video_log.append("Info", f"实际推理后端：{label}")
 
     def _log_image_progress(self, info: ProgressInfo) -> None:
         source_name = info.source_name
@@ -765,8 +1122,8 @@ class MainWindow(QMainWindow):
             float(getattr(result, "elapsed_seconds", 0.0) or 0.0)
             for result in results
         )
-        self.image_progress.setRange(0, 100)
-        self.image_progress.setValue(100 if results else 0)
+        self.image_progress.setRange(0, 1000)
+        self.image_progress.setValue(1000 if results else 0)
         if results and fail_count == 0:
             self._set_progress_color(self.image_progress, _PROGRESS_COLOR_SUCCESS)
         elif ok_count == 0:
@@ -801,7 +1158,7 @@ class MainWindow(QMainWindow):
 
     def _on_image_error(self, message: str) -> None:
         self._set_image_running(False)
-        self.image_progress.setRange(0, 100)
+        self.image_progress.setRange(0, 1000)
         self.image_progress.setValue(0)
         self._set_progress_color(self.image_progress, _PROGRESS_COLOR_ERROR)
         self.image_status.setText("处理失败")
@@ -810,7 +1167,7 @@ class MainWindow(QMainWindow):
 
     def _on_image_cancelled(self) -> None:
         self._set_image_running(False)
-        self.image_progress.setRange(0, 100)
+        self.image_progress.setRange(0, 1000)
         self.image_progress.setValue(0)
         self._set_progress_color(self.image_progress, _PROGRESS_COLOR_CANCELLED)
         self.image_status.setText("已取消")
@@ -819,8 +1176,8 @@ class MainWindow(QMainWindow):
 
     def _on_video_finished(self, result: SuperResResult) -> None:
         self._set_video_running(False)
-        self.video_progress.setRange(0, 100)
-        self.video_progress.setValue(100)
+        self.video_progress.setRange(0, 1000)
+        self.video_progress.setValue(1000)
         self._set_progress_color(self.video_progress, _PROGRESS_COLOR_SUCCESS)
         self.video_status.setText("完成")
         elapsed = float(getattr(result, "elapsed_seconds", 0.0) or 0.0)
@@ -833,7 +1190,7 @@ class MainWindow(QMainWindow):
 
     def _on_video_error(self, message: str) -> None:
         self._set_video_running(False)
-        self.video_progress.setRange(0, 100)
+        self.video_progress.setRange(0, 1000)
         self.video_progress.setValue(0)
         self._set_progress_color(self.video_progress, _PROGRESS_COLOR_ERROR)
         self.video_status.setText("处理失败")
@@ -842,7 +1199,7 @@ class MainWindow(QMainWindow):
 
     def _on_video_cancelled(self) -> None:
         self._set_video_running(False)
-        self.video_progress.setRange(0, 100)
+        self.video_progress.setRange(0, 1000)
         self.video_progress.setValue(0)
         self._set_progress_color(self.video_progress, _PROGRESS_COLOR_CANCELLED)
         self.video_status.setText("已取消")
@@ -850,12 +1207,37 @@ class MainWindow(QMainWindow):
         self._cleanup_video_worker()
 
     def _set_image_running(self, running: bool) -> None:
-        self.image_start_button.setEnabled(not running)
-        self.image_cancel_button.setEnabled(running)
+        if running:
+            self.image_start_button.setEnabled(False)
+            self.video_start_button.setEnabled(False)
+            self.image_cancel_button.setEnabled(True)
+            self.video_cancel_button.setEnabled(False)
+            return
+        self._refresh_task_controls()
 
     def _set_video_running(self, running: bool) -> None:
-        self.video_start_button.setEnabled(not running)
-        self.video_cancel_button.setEnabled(running)
+        if running:
+            self.image_start_button.setEnabled(False)
+            self.video_start_button.setEnabled(False)
+            self.image_cancel_button.setEnabled(False)
+            self.video_cancel_button.setEnabled(True)
+            return
+        self._refresh_task_controls()
+
+    def _task_busy(self) -> bool:
+        return any(
+            worker is not None and worker.isRunning()
+            for worker in (self._image_worker, self._video_worker)
+        )
+
+    def _refresh_task_controls(self) -> None:
+        image_running = self._image_worker is not None and self._image_worker.isRunning()
+        video_running = self._video_worker is not None and self._video_worker.isRunning()
+        busy = image_running or video_running
+        self.image_start_button.setEnabled(not busy)
+        self.video_start_button.setEnabled(not busy)
+        self.image_cancel_button.setEnabled(image_running)
+        self.video_cancel_button.setEnabled(video_running)
 
     def _cleanup_image_worker(self) -> None:
         worker = self._image_worker
@@ -876,7 +1258,9 @@ class MainWindow(QMainWindow):
                 if not worker.wait(3000):
                     event.ignore()
                     return
+        self._save_window_settings()
         super().closeEvent(event)
 
     def _apply_style(self) -> None:
+        self.setFont(QFont(theme.UI_FONT_FAMILY, theme.UI_FONT_POINT_SIZE))
         self.setStyleSheet(theme.APP_STYLESHEET)
