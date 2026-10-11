@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 import logging
-import shutil
 import subprocess
 import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -12,7 +12,8 @@ from typing import Any, Callable, Optional
 import numpy as np
 
 from ..core.environment_checker import detect_gpus, detect_video_bit_depth, find_discrete_gpu
-from ..core.sr_engine import SuperResCancelled
+from ..core.sr_engine import SuperResCancelled, resolve_denoise_plan
+from ..core.postprocess import finishing_touch
 from ..core.types import (
     Backend,
     GpuVendor,
@@ -27,6 +28,37 @@ logger = logging.getLogger(__name__)
 
 class _EncoderError(RuntimeError):
     """Raised when the selected FFmpeg encoder cannot complete startup."""
+
+
+class _StderrCollector:
+    """Drain subprocess stderr continuously to avoid pipe backpressure."""
+
+    def __init__(self, process: Optional[subprocess.Popen]) -> None:
+        self._process = process
+        self._chunks: list[bytes] = []
+        self._thread: Optional[threading.Thread] = None
+        if process is not None and process.stderr is not None:
+            self._thread = threading.Thread(target=self._read, daemon=True)
+            self._thread.start()
+
+    def _read(self) -> None:
+        stream = self._process.stderr if self._process is not None else None
+        if stream is None:
+            return
+        try:
+            while True:
+                chunk = stream.read(4096)
+                if not chunk:
+                    break
+                self._chunks.append(chunk)
+        except (OSError, ValueError):
+            return
+
+    def text(self) -> str:
+        if self._thread is not None:
+            self._thread.join(timeout=2)
+        data = b"".join(self._chunks)
+        return data.decode("utf-8", errors="replace").strip()
 
 
 def output_dimensions(width: int, height: int, scale: int) -> tuple[int, int]:
@@ -174,6 +206,9 @@ def _encode_video(
     progress_cb: Optional[Callable[[ProgressInfo], None]],
     cancel_flag: Any,
     denoise_strength: float = 0.5,
+    sharpen_strength: float = 0.0,
+    sar: str = "",
+    rotation: Optional[int] = None,
 ) -> None:
     out_width, out_height = output_dimensions(width, height, scale)
     frame_size = width * height * 3
@@ -217,9 +252,12 @@ def _encode_video(
         "-pix_fmt",
         "yuv420p",
         *_encoder_quality_args(encoder),
-        "-y",
-        str(output_path),
     ]
+    if sar and sar not in {"0:1", "1:1"}:
+        encoder_args.extend(["-vf", f"setsar={sar.replace(':', '/')}"])
+    if rotation is not None:
+        encoder_args.extend(["-metadata:s:v:0", f"rotate={rotation}"])
+    encoder_args.extend(["-y", str(output_path)])
 
     try:
         decoder = run_ffmpeg(decoder_args)
@@ -232,6 +270,10 @@ def _encode_video(
         _terminate(decoder)
         raise _EncoderError(f"Failed to start FFmpeg encoder {encoder}") from exc
 
+    decoder_stderr = _StderrCollector(decoder)
+    encoder_stderr = _StderrCollector(encoder_process)
+
+    plan = resolve_denoise_plan(engine, denoise_strength, scale)
     frames_written = 0
     try:
         while True:
@@ -248,11 +290,19 @@ def _encode_video(
                 )
 
             frame = np.frombuffer(raw_frame, dtype=np.uint8).reshape((height, width, 3))
+            if plan.pre_strength > 0.0:
+                frame = engine.pre_denoise(frame, plan.pre_strength)
             upscaled = engine.upscale_image(
                 frame,
                 scale,
                 denoise_strength=denoise_strength,
             )
+            if plan.classical_strength > 0.0 or sharpen_strength > 0.0:
+                upscaled = finishing_touch(
+                    upscaled,
+                    denoise_strength=plan.classical_strength,
+                    sharpen_strength=sharpen_strength,
+                )
             upscaled = np.asarray(upscaled)
             if upscaled.dtype != np.uint8:
                 raise RuntimeError("Upscale engine must return an uint8 RGB frame")
@@ -268,7 +318,7 @@ def _encode_video(
             except (BrokenPipeError, OSError) as exc:
                 _terminate(decoder)
                 _terminate(encoder_process)
-                detail = _decode_stderr(encoder_process)
+                detail = encoder_stderr.text()
                 raise _EncoderError(
                     f"FFmpeg encoder {encoder} exited during writing: {detail}"
                 ) from exc
@@ -282,7 +332,7 @@ def _encode_video(
         decoder_returncode = decoder.wait()
         if decoder_returncode != 0:
             _terminate(encoder_process)
-            detail = _decode_stderr(decoder)
+            detail = decoder_stderr.text()
             raise RuntimeError(f"FFmpeg decoding failed: {detail}")
     except Exception:
         _terminate(decoder)
@@ -293,7 +343,7 @@ def _encode_video(
         encoder_process.stdin.close()
     encoder_returncode = encoder_process.wait()
     if encoder_returncode != 0:
-        detail = _decode_stderr(encoder_process)
+        detail = encoder_stderr.text()
         raise _EncoderError(f"FFmpeg encoder {encoder} failed: {detail}")
 
 
@@ -346,6 +396,10 @@ def _remux_audio(
             "0:v:0",
             "-map",
             "1:a:0",
+            "-map_metadata",
+            "1",
+            "-map_chapters",
+            "1",
             "-c:v",
             "copy",
             "-c:a",
@@ -358,6 +412,39 @@ def _remux_audio(
     )
 
 
+def _remux_without_audio(
+    input_path: Path,
+    video_only: Path,
+    out_path: Path,
+) -> None:
+    _run_to_completion(
+        [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-nostdin",
+            "-y",
+            "-i",
+            str(video_only),
+            "-i",
+            str(input_path),
+            "-map",
+            "0:v:0",
+            "-map_metadata",
+            "1",
+            "-map_chapters",
+            "1",
+            "-c:v",
+            "copy",
+            "-movflags",
+            "+faststart",
+            str(out_path),
+        ],
+        "video remux",
+    )
+
+
 def upscale_video(
     input_path: str | Path,
     out_path: str | Path,
@@ -367,6 +454,7 @@ def upscale_video(
     progress_cb: Optional[Callable[[ProgressInfo], None]] = None,
     cancel_flag: Any = None,
     denoise_strength: float = 0.5,
+    sharpen_strength: float = 0.0,
 ) -> SuperResResult:
     """Upscale a single video frame by frame.
 
@@ -400,6 +488,9 @@ def upscale_video(
         if fps <= 0:
             fps = 25.0
         total_frames = int(info.get("total_frames") or 0)
+        sar = str(info.get("sar") or "")
+        rotation = info.get("rotation")
+        rotation = int(rotation) if rotation is not None else None
         if width <= 0 or height <= 0:
             raise RuntimeError(f"Invalid video dimensions: {width}x{height}")
 
@@ -426,6 +517,9 @@ def upscale_video(
                     progress_cb=progress_cb,
                     cancel_flag=cancel_flag,
                     denoise_strength=denoise_strength,
+                    sharpen_strength=sharpen_strength,
+                    sar=sar,
+                    rotation=rotation,
                 )
             except _EncoderError:
                 if encoder == fallback:
@@ -450,13 +544,16 @@ def upscale_video(
                     progress_cb=progress_cb,
                     cancel_flag=cancel_flag,
                     denoise_strength=denoise_strength,
+                    sharpen_strength=sharpen_strength,
+                    sar=sar,
+                    rotation=rotation,
                 )
 
             if info["has_audio"]:
                 audio_path = temp_root / f"audio{_audio_extension(input_path, out_path)}"
                 _remux_audio(input_path, video_only, out_path, audio_path)
             else:
-                shutil.move(str(video_only), str(out_path))
+                _remux_without_audio(input_path, video_only, out_path)
 
         return SuperResResult(
             ok=True,

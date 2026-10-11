@@ -8,6 +8,7 @@ import logging
 from typing import Optional
 
 from .environment_checker import available_backends
+from .runtime_capabilities import load_onnxruntime_for_backend, provider_for_backend
 from .types import Backend, GpuInfo, GpuVendor
 
 logger = logging.getLogger(__name__)
@@ -29,21 +30,26 @@ class BackendSelector:
 
     def select(self, preferred: Optional[Backend]) -> Backend:
         """返回生效后端；preferred 为空时用默认，不可用时回退默认并记录原因。"""
-        default = self.default_backend()
-        if preferred is None:
-            return default
-
         available = available_backends(self.gpu)
+        if preferred is None:
+            default = self.default_backend()
+            if default in available:
+                return default
+            if available:
+                return available[0]
+            return Backend.CPU
+
         if preferred in available:
             return preferred
 
+        fallback = available[0] if available else Backend.CPU
         logger.warning(
-            "后端 %s 在厂商 %s 上不可用，回退到默认后端 %s",
+            "后端 %s 在厂商 %s 上不可用，回退到后端 %s",
             preferred.value,
             self.gpu.vendor.value,
-            default.value,
+            fallback.value,
         )
-        return default
+        return fallback
 
     def load_onnxruntime(self, backend: Backend):
         """按后端动态加载对应 onnxruntime 包，返回 onnxruntime 模块。
@@ -54,17 +60,10 @@ class BackendSelector:
         - 两个包模块名均为 ``onnxruntime``，不能同 venv 共存，故用 importlib + sys.path
           动态加载；注意 onnxruntime 的 ``onnxruntime.capi`` 子包需一并处理。
         """
-        if backend == Backend.DIRECTML:
-            target_provider = "DmlExecutionProvider"
-        elif backend in {Backend.CUDA, Backend.TENSORRT}:
-            target_provider = "CUDAExecutionProvider"
-        elif backend == Backend.OPENVINO:
-            target_provider = "OpenVINOExecutionProvider"
-        elif backend == Backend.CPU:
-            target_provider = "CPUExecutionProvider"
-        elif backend == Backend.VULKAN:
+        target_provider = provider_for_backend(backend)
+        if backend == Backend.VULKAN:
             raise ValueError("Vulkan 后端不使用 onnxruntime")
-        else:
+        if target_provider is None:
             raise ValueError(f"不支持的 ONNX Runtime 后端: {backend}")
 
         # W6 打包阶段实现双运行时目录加载：
@@ -74,7 +73,7 @@ class BackendSelector:
         # TODO(W6): 根据 backend 将对应 runtime 目录临时加入 sys.path，并通过
         # importlib 动态加载/隔离 ``onnxruntime`` 与 ``onnxruntime.capi``。
         try:
-            import onnxruntime
+            onnxruntime = load_onnxruntime_for_backend(backend)
         except ImportError as exc:
             raise RuntimeError("onnxruntime 未安装，无法加载推理后端") from exc
 

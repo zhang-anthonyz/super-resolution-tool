@@ -22,6 +22,12 @@ def _load_engine(backend: Backend, model: ModelMeta) -> OnnxEngine | VulkanEngin
     return engine
 
 
+def _runtime_label(engine: OnnxEngine | VulkanEngine) -> str:
+    if isinstance(engine, OnnxEngine):
+        return engine.runtime_label
+    return "Vulkan ncnn"
+
+
 class ImageUpscaleWorker(QThread):
     """Run ``upscale_batch`` in a worker thread.
 
@@ -31,6 +37,7 @@ class ImageUpscaleWorker(QThread):
     """
 
     progress = Signal(object)
+    runtime = Signal(str)
     finished = Signal(object)
     error = Signal(str)
     cancelled = Signal()
@@ -44,6 +51,9 @@ class ImageUpscaleWorker(QThread):
         backend: Backend,
         overwrite: bool = False,
         denoise_strength: float = 0.5,
+        sharpen_strength: float = 0.0,
+        resize_to_original: bool = False,
+        compression_profile: str = "high",
         parent: Any = None,
     ) -> None:
         super().__init__(parent)
@@ -54,6 +64,9 @@ class ImageUpscaleWorker(QThread):
         self._backend = backend
         self._overwrite = bool(overwrite)
         self._denoise_strength = float(denoise_strength)
+        self._sharpen_strength = float(sharpen_strength)
+        self._resize_to_original = bool(resize_to_original)
+        self._compression_profile = str(compression_profile)
         self._cancel_event = threading.Event()
         self._engine: OnnxEngine | VulkanEngine | None = None
 
@@ -66,6 +79,7 @@ class ImageUpscaleWorker(QThread):
     def run(self) -> None:
         try:
             self._engine = _load_engine(self._backend, self._model)
+            self.runtime.emit(_runtime_label(self._engine))
             results = upscale_batch(
                 self._paths,
                 self._out_dir,
@@ -75,6 +89,9 @@ class ImageUpscaleWorker(QThread):
                 cancel_flag=self._cancel_event,
                 overwrite=self._overwrite,
                 denoise_strength=self._denoise_strength,
+                sharpen_strength=self._sharpen_strength,
+                resize_to_original=self._resize_to_original,
+                compression_profile=self._compression_profile,
             )
             self.finished.emit(results)
         except SuperResCancelled:
@@ -87,6 +104,7 @@ class VideoUpscaleWorker(QThread):
     """Run ``upscale_video`` in a worker thread."""
 
     progress = Signal(object)
+    runtime = Signal(str)
     finished = Signal(object)
     error = Signal(str)
     cancelled = Signal()
@@ -100,6 +118,7 @@ class VideoUpscaleWorker(QThread):
         backend: Backend,
         codec: VideoCodec,
         denoise_strength: float = 0.5,
+        sharpen_strength: float = 0.0,
         parent: Any = None,
     ) -> None:
         super().__init__(parent)
@@ -110,6 +129,7 @@ class VideoUpscaleWorker(QThread):
         self._backend = backend
         self._codec = codec
         self._denoise_strength = float(denoise_strength)
+        self._sharpen_strength = float(sharpen_strength)
         self._cancel_event = threading.Event()
         self._engine: OnnxEngine | VulkanEngine | None = None
 
@@ -122,6 +142,7 @@ class VideoUpscaleWorker(QThread):
     def run(self) -> None:
         try:
             self._engine = _load_engine(self._backend, self._model)
+            self.runtime.emit(_runtime_label(self._engine))
             result = upscale_video(
                 self._input_path,
                 self._out_path,
@@ -131,6 +152,7 @@ class VideoUpscaleWorker(QThread):
                 progress_cb=self.progress.emit,
                 cancel_flag=self._cancel_event,
                 denoise_strength=self._denoise_strength,
+                sharpen_strength=self._sharpen_strength,
             )
             if result.ok:
                 self.finished.emit(result)

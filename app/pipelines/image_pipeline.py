@@ -11,10 +11,18 @@ from PIL import Image
 # 超分工具需处理大图（4x 超分后像素激增），解除 Pillow 解压炸弹限制
 Image.MAX_IMAGE_PIXELS = None
 
-from ..core.sr_engine import SuperResCancelled
+from ..core.sr_engine import SuperResCancelled, resolve_denoise_plan
+from ..core.postprocess import finishing_touch
 from ..core.types import ProgressInfo, SuperResResult
 
 SUPPORTED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
+
+RESIZE_MODE_KEEP = "keep"
+RESIZE_MODE_RESTORE = "restore"
+
+COMPRESSION_PROFILE_HIGH = "high"
+COMPRESSION_PROFILE_COMPRESSED = "compressed"
+COMPRESSION_PROFILE_LOSSLESS = "lossless"
 
 
 def _format_for_extension(extension: str) -> str:
@@ -27,15 +35,55 @@ def _format_for_extension(extension: str) -> str:
     raise ValueError(f"Unsupported output image extension: {extension}")
 
 
-def _save_image(image: np.ndarray, out_path: Path) -> None:
+def _compression_options(image_format: str, profile: str) -> dict[str, Any]:
+    if image_format == "JPEG":
+        if profile == COMPRESSION_PROFILE_COMPRESSED:
+            return {
+                "quality": 82,
+                "optimize": True,
+                "progressive": True,
+                "subsampling": "4:2:0",
+            }
+        if profile == COMPRESSION_PROFILE_LOSSLESS:
+            return {
+                "quality": 100,
+                "optimize": True,
+                "progressive": False,
+                "subsampling": 0,
+            }
+        return {"quality": 95, "optimize": True, "subsampling": "4:2:2"}
+
+    if image_format == "PNG":
+        level = 9 if profile in {
+            COMPRESSION_PROFILE_COMPRESSED,
+            COMPRESSION_PROFILE_LOSSLESS,
+        } else 6
+        return {"compress_level": level, "optimize": True}
+
+    if image_format == "WEBP":
+        if profile == COMPRESSION_PROFILE_COMPRESSED:
+            return {"quality": 78, "method": 6}
+        if profile == COMPRESSION_PROFILE_LOSSLESS:
+            return {"lossless": True, "method": 6}
+        return {"quality": 92, "method": 6}
+
+    return {}
+
+
+def _save_image(
+    image: np.ndarray,
+    out_path: Path,
+    compression_profile: str = COMPRESSION_PROFILE_HIGH,
+) -> None:
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     image_format = _format_for_extension(out_path.suffix.lower())
     pil_image = Image.fromarray(np.asarray(image), "RGB")
 
-    save_options: dict[str, Any] = {"format": image_format}
-    if image_format == "JPEG":
-        save_options["quality"] = 95
+    save_options: dict[str, Any] = {
+        "format": image_format,
+        **_compression_options(image_format, compression_profile),
+    }
     pil_image.save(out_path, **save_options)
 
 
@@ -46,6 +94,9 @@ def upscale_single(
     scale: int,
     denoise_strength: float = 0.5,
     progress_cb: Optional[Callable[[ProgressInfo], None]] = None,
+    resize_to_original: bool = False,
+    compression_profile: str = COMPRESSION_PROFILE_HIGH,
+    sharpen_strength: float = 0.0,
 ) -> SuperResResult:
     """Upscale one image and return a result object."""
     image_path = Path(image_path)
@@ -53,18 +104,57 @@ def upscale_single(
     started = time.perf_counter()
 
     try:
+        _report_phase(progress_cb, 0.05, "decode", "读取图片")
         if out_path.suffix.lower() not in SUPPORTED_EXTENSIONS:
             raise ValueError(f"Unsupported output image extension: {out_path.suffix}")
 
         with Image.open(image_path) as source:
             image = np.asarray(source.convert("RGB"))
+            original_size = source.size
+        _report_phase(progress_cb, 0.15, "decode", "图片读取完成")
+
+        def tile_cb(tile_info: ProgressInfo) -> None:
+            tile_total = max(int(tile_info.total), 1)
+            tile_current = max(0.0, float(tile_info.current))
+            fraction = 0.15 + 0.75 * min(tile_current / tile_total, 1.0)
+            _report_phase(
+                progress_cb,
+                fraction,
+                "tile",
+                tile_info.message or "推理中",
+            )
+
+        # 降噪路由：1x 降噪模型在输入尺度先降噪；同倍率降噪模型在引擎内与输出
+        # 插值；两者都不适用时才回退到内置的边缘保持降噪。
+        plan = resolve_denoise_plan(engine, denoise_strength, scale)
+        if plan.pre_strength > 0.0:
+            _report_phase(progress_cb, 0.16, "denoise", "输入尺度降噪")
+            image = engine.pre_denoise(image, plan.pre_strength)
+            _report_phase(progress_cb, 0.18, "denoise", "输入尺度降噪完成")
+
         upscaled = engine.upscale_image(
             image,
             scale,
             denoise_strength=denoise_strength,
-            progress_cb=progress_cb,
+            progress_cb=tile_cb,
         )
-        _save_image(upscaled, out_path)
+        _report_phase(progress_cb, 0.88, "inference", "推理完成")
+        if plan.classical_strength > 0.0 or sharpen_strength > 0.0:
+            upscaled = finishing_touch(
+                upscaled,
+                denoise_strength=plan.classical_strength,
+                sharpen_strength=sharpen_strength,
+            )
+            _report_phase(progress_cb, 0.92, "finish", "降噪与锐化")
+        if resize_to_original:
+            pil_image = Image.fromarray(np.asarray(upscaled), "RGB")
+            upscaled = np.asarray(
+                pil_image.resize(original_size, Image.Resampling.LANCZOS)
+            )
+            _report_phase(progress_cb, 0.94, "resize", "回缩到原图尺寸")
+        _report_phase(progress_cb, 0.96, "save", "正在保存")
+        _save_image(upscaled, out_path, compression_profile=compression_profile)
+        _report_phase(progress_cb, 0.99, "save", "保存完成")
         return SuperResResult(
             ok=True,
             output_path=out_path,
@@ -117,59 +207,20 @@ def _should_cancel(cancel_flag: Any) -> bool:
     return bool(cancel_flag)
 
 
-def _report_progress(
+def _report_phase(
     progress_cb: Optional[Callable[[ProgressInfo], None]],
-    current: float,
-    total: int,
-    source: Path,
-    skipped: bool = False,
-    cancelled: bool = False,
+    fraction: float,
+    phase: str,
+    message: str,
 ) -> None:
     if progress_cb is None:
         return
-    message = f"{current:.0f}/{total} {source.name}"
-    if skipped:
-        message += " skipped"
     progress_cb(
         ProgressInfo(
-            current=current,
-            total=total,
+            current=min(max(float(fraction), 0.0), 1.0),
+            total=1,
             message=message,
-            cancelled=cancelled,
-            image_index=int(current),
-            image_total=total,
-            source_name=source.name,
-            phase="skipped" if skipped else "image",
-        )
-    )
-
-
-def _report_tile_progress(
-    progress_cb: Optional[Callable[[ProgressInfo], None]],
-    image_index: int,
-    image_total: int,
-    source: Path,
-    tile_info: ProgressInfo,
-) -> None:
-    if progress_cb is None:
-        return
-
-    tile_total = max(int(tile_info.total), 1)
-    tile_current = max(0.0, float(tile_info.current))
-    overall_current = (image_index - 1) + (tile_current / tile_total)
-    overall_current = min(float(image_total), max(0.0, overall_current))
-    progress_cb(
-        ProgressInfo(
-            current=overall_current,
-            total=image_total,
-            message=(
-                f"第 {image_index}/{image_total} 张 · tile "
-                f"{int(tile_current)}/{tile_total} · {source.name}"
-            ),
-            image_index=image_index,
-            image_total=image_total,
-            source_name=source.name,
-            phase="tile",
+            phase=phase,
         )
     )
 
@@ -183,6 +234,9 @@ def upscale_batch(
     cancel_flag: Any = None,
     overwrite: bool = False,
     denoise_strength: float = 0.5,
+    resize_to_original: bool = False,
+    compression_profile: str = COMPRESSION_PROFILE_HIGH,
+    sharpen_strength: float = 0.0,
 ) -> list[SuperResResult]:
     """Upscale supported files recursively and return one result per input."""
     out_dir = Path(out_dir)
@@ -193,25 +247,49 @@ def upscale_batch(
 
     for index, source in enumerate(files, start=1):
         if _should_cancel(cancel_flag) or getattr(engine, "cancelled", False):
-            _report_progress(
+            _report_image_progress(
                 progress_cb,
                 index,
                 total,
                 source,
-                cancelled=True,
+                0.0,
+                phase="cancelled",
+                message="已取消",
             )
             raise SuperResCancelled()
 
-        out_path = out_dir / f"{source.stem}_x{scale}{source.suffix.lower()}"
+        suffix = "_restored" if resize_to_original else ""
+        out_path = out_dir / f"{source.stem}_x{scale}{suffix}{source.suffix.lower()}"
         if out_path.exists() and not overwrite:
             results.append(
                 SuperResResult(ok=True, output_path=out_path, input_path=source)
             )
-            _report_progress(progress_cb, index, total, source, skipped=True)
+            _report_image_progress(
+                progress_cb,
+                index,
+                total,
+                source,
+                1.0,
+                phase="skipped",
+                message="已跳过",
+            )
             continue
 
-        def tile_cb(tile_info: ProgressInfo) -> None:
-            _report_tile_progress(progress_cb, index, total, source, tile_info)
+        def image_cb(image_info: ProgressInfo) -> None:
+            fraction = (
+                float(image_info.current) / float(image_info.total)
+                if image_info.total
+                else 0.0
+            )
+            _report_image_progress(
+                progress_cb,
+                index,
+                total,
+                source,
+                fraction,
+                phase=image_info.phase or "image",
+                message=image_info.message,
+            )
 
         result = upscale_single(
             source,
@@ -219,9 +297,51 @@ def upscale_batch(
             engine,
             scale,
             denoise_strength=denoise_strength,
-            progress_cb=tile_cb,
+            progress_cb=image_cb,
+            resize_to_original=resize_to_original,
+            compression_profile=compression_profile,
+            sharpen_strength=sharpen_strength,
         )
         results.append(result)
-        _report_progress(progress_cb, index, total, source)
+        if result.ok:
+            _report_image_progress(
+                progress_cb,
+                index,
+                total,
+                source,
+                1.0,
+                phase="image",
+                message="完成",
+            )
 
     return results
+
+
+def _report_image_progress(
+    progress_cb: Optional[Callable[[ProgressInfo], None]],
+    image_index: int,
+    image_total: int,
+    source: Path,
+    fraction: float,
+    phase: str,
+    message: str,
+) -> None:
+    if progress_cb is None:
+        return
+    fraction = min(max(float(fraction), 0.0), 1.0)
+    current = (image_index - 1) + fraction
+    detail = f"第 {image_index}/{image_total} 张"
+    if message:
+        detail += f" · {message}"
+    detail += f" · {source.name}"
+    progress_cb(
+        ProgressInfo(
+            current=min(float(image_total), max(0.0, current)),
+            total=image_total,
+            message=detail,
+            image_index=image_index,
+            image_total=image_total,
+            source_name=source.name,
+            phase=phase,
+        )
+    )

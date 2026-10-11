@@ -14,6 +14,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 from app.core.environment_checker import EnvironmentCheckError, check_environment
 from app.core.paths import app_root
 from app.core.types import GpuInfo
+from app.ui import theme
 from app.ui.main_window import MainWindow
 
 
@@ -22,7 +23,7 @@ def create_main_window(gpu: Optional[GpuInfo] = None) -> MainWindow:
     app = QApplication.instance()
     if app is None:
         app = QApplication([])
-    app.setStyle("Fusion")
+    theme.apply_app_theme(app)
     if gpu is None:
         gpu = check_environment()
     return MainWindow(gpu)
@@ -83,7 +84,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     app = QApplication.instance() or QApplication(list(argv or sys.argv))
     app.setApplicationName("Super Resolution Tool")
-    app.setStyle("Fusion")
+    theme.apply_app_theme(app)
 
     try:
         gpu = check_environment()

@@ -20,7 +20,27 @@ datas = [
     (str(project_root / "vendor" / "ncnn-models"), "vendor/ncnn-models"),
 ] + onnx_models
 
+runtime_datas = [
+    (str(runtime_dir), f"runtime/{runtime_dir.name}")
+    for runtime_dir in (
+        project_root / "runtime" / "cuda",
+        project_root / "runtime" / "dml",
+        project_root / "runtime" / "openvino",
+    )
+    if runtime_dir.is_dir()
+]
+datas += runtime_datas
+
+shiboken_binaries = collect_dynamic_libs("shiboken6")
+shiboken_root = (
+    Path(shiboken_binaries[0][0]).parent if shiboken_binaries else None
+)
 binaries = collect_dynamic_libs("onnxruntime")
+if shiboken_root is not None:
+    binaries += [
+        (str(path), ".")
+        for path in shiboken_root.glob("*.dll")
+    ]
 hiddenimports = collect_submodules("onnxruntime.capi")
 
 a = Analysis(
@@ -46,6 +66,15 @@ a = Analysis(
     ],
     noarchive=False,
 )
+
+# PyInstaller can pick up ICU DLLs from unrelated tools on PATH. Qt6Core in
+# PySide6 expects the system ICU C ABI, while some local ICU builds only expose
+# versioned C++ exports, which makes QtWidgets fail with WinError 127.
+_drop_icu = {"icuuc.dll", "icuin.dll", "icudt78.dll"}
+a.binaries = [
+    entry for entry in a.binaries
+    if Path(entry[0]).name.lower() not in _drop_icu
+]
 
 pyz = PYZ(a.pure)
 

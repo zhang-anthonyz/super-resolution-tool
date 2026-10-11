@@ -80,7 +80,11 @@ class ModelMeta:
     scene: Scene                       # 适用场景
     backend: Backend                   # 可用后端（Anime4K 仅 VULKAN/CPU）
     model_path: Path                   # 模型路径（.onnx 或 ncnn .param/.bin 目录）
-    denoise_pair_path: Optional[Path] = None  # 输出插值降噪对路径（ONNX 后端使用）
+    denoise_pair_path: Optional[Path] = None  # 降噪模型路径（ONNX 后端使用）
+    # 降噪模型自身的倍率：1 表示"在输入尺度做预降噪"，None 表示与主模型同倍率
+    # （同倍率时按降噪强度与主模型输出做插值，即原来的 pair 混合路径）。
+    denoise_pair_scale: Optional[int] = None
+    kind: str = "sr"                        # "sr" 超分模型；"denoise" 纯降噪模型
     input_name: str = "input"
     output_name: str = "output"
     scale_input: Optional[str] = None       # SRMD 的 "scale"

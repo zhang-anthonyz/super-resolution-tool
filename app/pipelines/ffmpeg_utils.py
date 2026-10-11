@@ -158,6 +158,27 @@ def probe_video(path: str | Path) -> dict[str, Any]:
         fps = _parse_fraction(video.get("r_frame_rate"))
 
     has_audio = any(stream.get("codec_type") == "audio" for stream in streams)
+    sar = str(video.get("sample_aspect_ratio") or "")
+    rotation: Optional[int] = None
+    tags = video.get("tags")
+    if isinstance(tags, dict) and tags.get("rotate") is not None:
+        try:
+            rotation = int(tags["rotate"])
+        except (TypeError, ValueError):
+            rotation = None
+    side_data = video.get("side_data_list")
+    if rotation is None and isinstance(side_data, list):
+        for item in side_data:
+            if not isinstance(item, dict):
+                continue
+            if item.get("rotation") is None:
+                continue
+            try:
+                rotation = int(item["rotation"])
+            except (TypeError, ValueError):
+                rotation = None
+            if rotation is not None:
+                break
     duration = video.get("duration")
     if duration is None:
         duration = video.get("DURATION")
@@ -178,6 +199,8 @@ def probe_video(path: str | Path) -> dict[str, Any]:
         "total_frames": _stream_total_frames(video, fps),
         "has_audio": has_audio,
         "duration": duration_seconds,
+        "sar": sar,
+        "rotation": rotation,
     }
 
 

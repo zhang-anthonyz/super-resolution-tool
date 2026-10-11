@@ -27,9 +27,10 @@ from ctypes import (
 )
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterable, Optional
 
 from .paths import app_root
+from .runtime_capabilities import backend_available
 from .types import Backend, GpuInfo, GpuType, GpuVendor
 
 logger = logging.getLogger(__name__)
@@ -303,7 +304,9 @@ def _is_amd_integrated_name(name: str) -> bool:
     discrete_markers = ("rx", "pro", "firepro", "instinct", " r9", " r7", " r5", " r3", " hd ")
     if any(marker in lowered for marker in discrete_markers):
         return False
-    return "graphics" in lowered
+    if "graphics" in lowered or "vega" in lowered:
+        return True
+    return bool(re.search(r"\b(?:6|7|8)\d0m\b", lowered))
 
 
 def _classify_gpu_type(vendor: GpuVendor, name: str, dedicated_bytes: int) -> GpuType:
@@ -516,8 +519,11 @@ def check_environment() -> GpuInfo:
     return gpu
 
 
-def available_backends(gpu: GpuInfo) -> list[Backend]:
-    """根据显卡厂商与驱动返回该机器可用的后端列表。"""
+def available_backends(
+    gpu: GpuInfo,
+    runtime_providers: Optional[Iterable[str]] = None,
+) -> list[Backend]:
+    """Return backends usable by this machine and the active ORT runtime."""
     if gpu.vendor == GpuVendor.NVIDIA:
         backends = [Backend.CUDA, Backend.DIRECTML, Backend.CPU]
     elif gpu.vendor == GpuVendor.AMD:
@@ -527,10 +533,16 @@ def available_backends(gpu: GpuInfo) -> list[Backend]:
     else:
         backends = [Backend.CPU]
 
-    if Backend.VULKAN in backends and not _ncnn_path().is_file():
-        backends.remove(Backend.VULKAN)
+    available: list[Backend] = []
+    for backend in backends:
+        if backend == Backend.VULKAN:
+            if _ncnn_path().is_file():
+                available.append(backend)
+            continue
+        if backend_available(backend, runtime_providers):
+            available.append(backend)
 
-    return backends
+    return available
 
 
 def detect_video_bit_depth(video_path: str) -> tuple[int, bool]:
