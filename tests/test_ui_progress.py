@@ -1,9 +1,11 @@
 import os
+import tempfile
 from pathlib import Path
 
 import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+os.environ.setdefault("SRT_SETTINGS_DIR", tempfile.mkdtemp(prefix="srt-ui-tests-"))
 pytest.importorskip("PySide6")
 
 from PySide6.QtWidgets import QApplication
@@ -32,10 +34,10 @@ def test_progress_bars_start_static_at_zero(qapp):
     window = MainWindow(make_gpu())
     try:
         assert window.image_progress.minimum() == 0
-        assert window.image_progress.maximum() == 100
+        assert window.image_progress.maximum() == 1000
         assert window.image_progress.value() == 0
         assert window.video_progress.minimum() == 0
-        assert window.video_progress.maximum() == 100
+        assert window.video_progress.maximum() == 1000
         assert window.video_progress.value() == 0
     finally:
         window.close()
@@ -47,12 +49,12 @@ def test_progress_handler_uses_task_total_and_current(qapp):
     window = MainWindow(make_gpu())
     try:
         window._on_image_progress(ProgressInfo(current=2, total=5, message="2/5"))
-        assert window.image_progress.maximum() == 5
-        assert window.image_progress.value() == 2
+        assert window.image_progress.maximum() == 1000
+        assert window.image_progress.value() == 400
 
         window._on_video_progress(ProgressInfo(current=3, total=10, message="3/10"))
-        assert window.video_progress.maximum() == 10
-        assert window.video_progress.value() == 3
+        assert window.video_progress.maximum() == 1000
+        assert window.video_progress.value() == 300
     finally:
         window.close()
         window.deleteLater()
@@ -74,8 +76,8 @@ def test_image_progress_rounds_fractional_value_and_logs_tile_progress(qapp):
             )
         )
 
-        assert window.image_progress.maximum() == 5
-        assert window.image_progress.value() == 3
+        assert window.image_progress.maximum() == 1000
+        assert window.image_progress.value() == 500
         assert "处理 a.png" in window.image_log.text_edit.toPlainText()
         assert "tile 1/2" in window.image_log.text_edit.toPlainText()
     finally:
@@ -103,6 +105,8 @@ def test_image_finished_logs_save_and_summary(qapp):
         assert f"保存到 {output}" in text
         assert "成功 1 / 失败 0" in text
         assert "总耗时 1.2s" in text
+        assert window.image_progress.maximum() == 1000
+        assert window.image_progress.value() == 1000
     finally:
         window.close()
         window.deleteLater()

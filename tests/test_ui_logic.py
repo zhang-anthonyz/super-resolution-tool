@@ -5,11 +5,13 @@ import pytest
 from app.core.paths import app_root
 from app.core.types import Backend, GpuInfo, GpuType, GpuVendor, Scene
 from app.ui.ui_logic import (
+    all_denoise_options,
     backend_choices,
     build_model_meta,
     collect_image_files,
     copy_model_to_library,
     default_model_path,
+    denoise_summary,
     effective_scale,
     fixed_scale_for_model,
     format_log_line,
@@ -74,8 +76,18 @@ def test_model_options_expose_fp16_registry_with_denoise_hints():
         "RealESRGAN_x2plus",
         "RealESRGAN_x4plus_anime_6B",
         "RealESRGAN_x4plus_fp16",
+        "SwinIR_x4_classical",
+        "SwinIR_x4_realSR_GAN",
+        "4x-UltraSharp_fp16",
     ]
     assert any("降噪" in display for _, display in options)
+
+
+def test_denoise_options_are_separate_from_sr_options():
+    denoise_names = [name for name, _ in all_denoise_options()]
+
+    assert denoise_names == ["realesr-general-wdn-x4v3", "SwinIR_colorDN25"]
+    assert not set(denoise_names) & {name for name, _ in model_options()}
 
 
 def test_supported_model_formats_and_copy_model_to_library(tmp_path):

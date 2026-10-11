@@ -121,6 +121,16 @@ def test_available_backends_keeps_vulkan_when_ncnn_exists(tmp_path, monkeypatch)
     assert available_backends(gpu) == [Backend.DIRECTML, Backend.VULKAN, Backend.CPU]
 
 
+def test_available_backends_respects_runtime_providers(monkeypatch):
+    gpu = make_gpu(vendor=GpuVendor.NVIDIA)
+    monkeypatch.setattr(environment_checker, "_ncnn_path", lambda: Path("missing.exe"))
+
+    assert available_backends(
+        gpu,
+        runtime_providers=["DmlExecutionProvider", "CPUExecutionProvider"],
+    ) == [Backend.DIRECTML, Backend.CPU]
+
+
 def test_check_environment_raises_without_discrete_gpu(monkeypatch):
     integrated = make_gpu(
         vendor=GpuVendor.INTEL,
@@ -142,6 +152,8 @@ def test_amd_integrated_name_detection():
     assert _is_amd_integrated_name("AMD Radeon(TM) Graphics") is True
     assert _is_amd_integrated_name("AMD Radeon Graphics") is True
     assert _is_amd_integrated_name("Radeon Vega 8 Graphics") is True
+    assert _is_amd_integrated_name("AMD Radeon 780M") is True
+    assert _is_amd_integrated_name("AMD Radeon 680M") is True
     assert _is_amd_integrated_name("AMD Radeon RX 7900 XT") is False
     assert _is_amd_integrated_name("Radeon Pro W6800") is False
 

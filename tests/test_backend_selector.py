@@ -51,6 +51,19 @@ def test_select_falls_back_and_logs_when_preferred_is_unavailable(caplog):
     assert "directml" in caplog.text
 
 
+def test_select_falls_back_to_first_available_backend(monkeypatch):
+    import app.core.backend_selector as selector_module
+
+    selector = BackendSelector(make_gpu(GpuVendor.NVIDIA))
+    monkeypatch.setattr(
+        selector_module,
+        "available_backends",
+        lambda gpu: [Backend.DIRECTML, Backend.CPU],
+    )
+
+    assert selector.select(Backend.CUDA) == Backend.DIRECTML
+
+
 def test_load_onnxruntime_directml_returns_module_with_dml_provider():
     selector = BackendSelector(make_gpu(GpuVendor.AMD))
     onnxruntime = selector.load_onnxruntime(Backend.DIRECTML)

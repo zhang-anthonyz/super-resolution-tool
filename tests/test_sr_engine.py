@@ -30,6 +30,28 @@ class FakeSession:
         ]
 
 
+class _FakeMeta:
+    """Minimal stand-in for an onnxruntime NodeArg."""
+
+    def __init__(self, name, type_):
+        self.name = name
+        self.type = type_
+
+
+class FakeTypedSession(FakeSession):
+    """Fake session that reports an ONNX input dtype like a real session."""
+
+    def __init__(self, scale=1, input_type="tensor(float)"):
+        super().__init__(scale)
+        self.input_type = input_type
+
+    def get_inputs(self):
+        return [_FakeMeta("input", self.input_type)]
+
+    def get_outputs(self):
+        return [_FakeMeta("output", self.input_type)]
+
+
 class FakeValueSession:
     def __init__(self, scale, value):
         self.scale = scale
@@ -147,7 +169,8 @@ def test_scale_and_denoise_inputs_are_added_to_feeds():
 
     assert set(session.feeds[0]) == {"input", "scale", "denoise"}
     np.testing.assert_array_equal(session.feeds[0]["scale"], [2.0])
-    np.testing.assert_array_equal(session.feeds[0]["denoise"], [0.0])
+    # denoise_input 现在由"降噪强度"驱动（upscale_image 默认 0.5），不再硬编码 0.0
+    np.testing.assert_array_equal(session.feeds[0]["denoise"], [0.5])
 
 
 def test_fp16_engine_feeds_float16_tiles_and_returns_uint8():
@@ -199,3 +222,140 @@ def test_denoise_strength_is_ignored_without_pair_session():
     output = engine.upscale_image(image, scale=2, denoise_strength=1.0)
 
     np.testing.assert_array_equal(output, np.full_like(output, 51))
+
+
+def test_load_model_rejects_missing_runtime_provider(tmp_path, monkeypatch):
+    import app.core.sr_engine as sr_engine
+
+    model_path = tmp_path / "fake.onnx"
+    model_path.write_bytes(b"not-a-real-model")
+    model = make_model(scale=2)
+    model = ModelMeta(
+        name=model.name,
+        scale=model.scale,
+        scene=model.scene,
+        backend=Backend.CUDA,
+        model_path=model_path,
+        tile_size=model.tile_size,
+    )
+    class FakeOnnxRuntime:
+        @staticmethod
+        def get_available_providers():
+            return []
+
+    monkeypatch.setattr(
+        sr_engine,
+        "load_onnxruntime_for_backend",
+        lambda backend: FakeOnnxRuntime,
+    )
+
+    engine = OnnxEngine(Backend.CUDA)
+
+    with pytest.raises(RuntimeError, match="CUDAExecutionProvider"):
+        engine.load_model(model)
+
+
+def _engine_with_typed_pair(main_type: str, pair_type: str, pair_scale: int = 2):
+    """Engine whose main and denoise sessions advertise different dtypes."""
+    model = make_model(scale=pair_scale)
+    main = FakeTypedSession(scale=pair_scale, input_type=main_type)
+    pair = FakeTypedSession(scale=pair_scale, input_type=pair_type)
+    engine = make_engine(main, model)
+    engine._fp16 = engine._is_fp16_session(main)  # noqa: SLF001
+    engine._pair_session = pair  # noqa: SLF001
+    engine._pair_fp16 = engine._is_fp16_session(pair)  # noqa: SLF001
+    engine._pair_input_name = "input"  # noqa: SLF001
+    engine._pair_output_name = "output"  # noqa: SLF001
+    engine._pair_output_channels = 3  # noqa: SLF001
+    engine._pair_scale = pair_scale  # noqa: SLF001
+    return engine, main, pair
+
+
+def test_denoise_session_gets_its_own_dtype_in_post_blend():
+    """fp32 main + fp16 denoiser must not feed float32 into the pair session."""
+    engine, main, pair = _engine_with_typed_pair("tensor(float)", "tensor(float16)")
+
+    engine.upscale_image(
+        np.zeros((4, 4, 3), dtype=np.uint8), scale=2, denoise_strength=0.5
+    )
+
+    assert main.feeds[0]["input"].dtype == np.float32
+    assert pair.feeds[0]["input"].dtype == np.float16
+
+
+def test_pre_denoise_feeds_the_pair_session_dtype():
+    """fp16 main + fp32 SwinIR denoiser: the pair session needs float32."""
+    engine, _main, pair = _engine_with_typed_pair(
+        "tensor(float16)", "tensor(float)", pair_scale=1
+    )
+
+    engine.pre_denoise(np.zeros((8, 8, 3), dtype=np.uint8), 1.0)
+
+    assert engine._pair_session.feeds[0]["input"].dtype == np.float32  # noqa: SLF001
+    assert pair.feeds[0]["input"].dtype == np.float32
+
+
+def test_inference_and_pair_dtype_are_tracked_separately():
+    engine, _main, _pair = _engine_with_typed_pair(
+        "tensor(float16)", "tensor(float)", pair_scale=1
+    )
+
+    assert engine._inference_dtype() is np.float16  # noqa: SLF001
+    assert engine._pair_dtype() is np.float32  # noqa: SLF001
+
+
+def test_tiled_run_releases_disk_buffers_synchronously(monkeypatch):
+    """Cleanup must happen inside the call, not whenever GC gets around to it."""
+    import tempfile
+
+    from app.core import sr_engine
+
+    monkeypatch.setattr(sr_engine, "_DISK_BUFFER_THRESHOLD_BYTES", 1)
+    released = []
+    monkeypatch.setattr(
+        sr_engine.OnnxEngine,
+        "_release_temp_buffers",
+        staticmethod(lambda handles: released.append(len(handles))),
+    )
+
+    engine = make_engine(FakeSession(scale=2), make_model(scale=2))
+    engine.upscale_image(np.zeros((8, 8, 3), dtype=np.uint8), scale=2)
+
+    # 累加器 + 权重 + 均值缓冲都在磁盘上，一次调用内全部释放
+    assert len(released) == 1 and released[0] >= 2, released
+
+
+def test_tiled_run_leaves_no_temp_dirs(monkeypatch):
+    """Disk scratch buffers (huge images) must not leak into %TEMP%."""
+    import gc
+    import tempfile
+
+    from app.core import sr_engine
+
+    monkeypatch.setattr(sr_engine, "_DISK_BUFFER_THRESHOLD_BYTES", 1)
+    before = set(Path(tempfile.gettempdir()).glob("srt-buffer-*"))
+
+    engine = make_engine(FakeSession(scale=2), make_model(scale=2))
+    engine.upscale_image(np.zeros((8, 8, 3), dtype=np.uint8), scale=2)
+    gc.collect()
+
+    after = set(Path(tempfile.gettempdir()).glob("srt-buffer-*"))
+    assert after - before == set(), f"leaked: {after - before}"
+
+
+def test_cancelled_tiled_run_also_removes_disk_buffers(monkeypatch):
+    import tempfile
+
+    from app.core import sr_engine
+
+    monkeypatch.setattr(sr_engine, "_DISK_BUFFER_THRESHOLD_BYTES", 1)
+    before = set(Path(tempfile.gettempdir()).glob("srt-buffer-*"))
+
+    engine = make_engine(FakeSession(scale=2), make_model(scale=2))
+    engine.cancel()
+
+    with pytest.raises(SuperResCancelled):
+        engine.upscale_image(np.zeros((8, 8, 3), dtype=np.uint8), scale=2)
+
+    after = set(Path(tempfile.gettempdir()).glob("srt-buffer-*"))
+    assert after - before == set(), f"leaked: {after - before}"

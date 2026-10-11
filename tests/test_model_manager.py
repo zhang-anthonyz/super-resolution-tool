@@ -4,34 +4,54 @@ import pytest
 
 from app.models.model_manager import (
     builtin_models,
+    denoise_models,
     download_model,
     import_custom_model,
+    import_custom_model_to_library,
+    registered_custom_models,
     scene_default,
 )
 from app.core.types import Backend, ModelMeta, Scene
+from app.ui.ui_logic import resolve_project_path
 
 
-def test_builtin_models_contains_real_esrgan_x4plus():
+def test_builtin_models_cover_real_esrgan_and_swinir():
     models = builtin_models()
 
-    assert len(models) == 4
+    assert len(models) == 7
     by_name = {model.name: model for model in models}
     assert set(by_name) == {
         "realesr-general-x4v3",
         "RealESRGAN_x2plus",
         "RealESRGAN_x4plus_anime_6B",
         "RealESRGAN_x4plus_fp16",
+        "SwinIR_x4_classical",
+        "SwinIR_x4_realSR_GAN",
+        "4x-UltraSharp_fp16",
     }
 
     assert by_name["RealESRGAN_x2plus"].scale == 2
-    assert by_name["realesr-general-x4v3"].denoise_pair_path == Path(
-        "models/onnx/realesr-general-wdn-x4v3.onnx"
-    )
+    assert by_name["SwinIR_x4_classical"].scale == 4
+    assert by_name["4x-UltraSharp_fp16"].scale == 4
     for model in models:
         assert model.scale in {2, 4}
         assert model.backend == Backend.DIRECTML
         assert model.model_path.suffix == ".onnx"
+        assert model.kind == "sr"
         assert "降噪" in model.description or "无降噪" in model.description
+
+
+def test_denoise_models_are_registered_separately():
+    models = denoise_models()
+    by_name = {model.name: model for model in models}
+
+    assert set(by_name) == {"realesr-general-wdn-x4v3", "SwinIR_colorDN25"}
+    assert all(model.kind == "denoise" for model in models)
+    # 1x 降噪模型走"输入尺度预降噪"，x4 模型与主模型输出按强度插值
+    assert by_name["SwinIR_colorDN25"].scale == 1
+    assert by_name["realesr-general-wdn-x4v3"].scale == 4
+    # 降噪模型不得混入超分模型下拉列表
+    assert not (set(by_name) & {model.name for model in builtin_models()})
 
 
 def test_scene_default_maps_realistic_to_real_esrgan():
@@ -105,6 +125,26 @@ def test_import_custom_model_reads_metadata_and_detects_scale_input(tmp_path):
     assert model.scale_input == "scale"
     assert model.tile_size == 256
     assert model.description == "test model"
+
+
+def test_import_custom_model_to_library_registers_model(tmp_path):
+    onnx_path = tmp_path / "registered.onnx"
+    _save_scale_aware_identity_model(onnx_path)
+    models_dir = tmp_path / "library"
+    registry_path = tmp_path / "custom_models.json"
+
+    model = import_custom_model_to_library(
+        onnx_path,
+        models_dir=models_dir,
+        registry_path=registry_path,
+    )
+
+    assert model.name == "registered"
+    assert model.model_path.parent == models_dir
+    assert model.scale_input == "scale"
+    models = registered_custom_models(registry_path)
+    assert [item.name for item in models] == ["registered"]
+    assert resolve_project_path(models[0].model_path) == model.model_path
 
 
 class _FakeResponse:

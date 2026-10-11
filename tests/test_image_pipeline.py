@@ -105,14 +105,33 @@ def test_upscale_single_forwards_tile_progress(tmp_path):
         output,
         engine,
         scale=2,
-        progress_cb=lambda info: reported.append((info.current, info.total, info.message)),
+        progress_cb=lambda info: reported.append(info),
     )
 
     assert result.ok is True
-    assert reported == [
-        (1, 2, "tile 1/2"),
-        (2, 2, "tile 2/2"),
-    ]
+    tile_reports = [info.message for info in reported if info.phase == "tile"]
+    assert tile_reports == ["tile 1/2", "tile 2/2"]
+    assert [info.phase for info in reported[:2]] == ["decode", "decode"]
+    assert reported[-1].phase == "save"
+    assert reported[-1].current == 0.99
+
+
+def test_upscale_single_can_restore_original_resolution(tmp_path):
+    source = tmp_path / "input.png"
+    output = tmp_path / "output_restored.png"
+    _write_image(source, size=(3, 2))
+
+    result = upscale_single(
+        source,
+        output,
+        _NearestEngine(),
+        scale=4,
+        resize_to_original=True,
+    )
+
+    assert result.ok is True
+    with Image.open(output) as image:
+        assert image.size == (3, 2)
 
 
 def test_upscale_batch_filters_extensions_and_names_outputs(tmp_path):
@@ -165,10 +184,17 @@ def test_upscale_batch_reports_current_and_total(tmp_path):
         tmp_path / "output",
         _NearestEngine(),
         scale=2,
-        progress_cb=lambda info: reported.append((info.current, info.total)),
+        progress_cb=lambda info: reported.append(
+            (info.current, info.total, info.phase)
+        ),
     )
 
-    assert reported == [(1, 2), (2, 2)]
+    assert [item for item in reported if item[2] == "image"] == [
+        (1.0, 2, "image"),
+        (2.0, 2, "image"),
+    ]
+    assert reported[0][2] == "decode"
+    assert reported[-1][2] == "image"
 
 
 def test_upscale_batch_maps_tile_progress_to_continuous_overall_progress(tmp_path):
@@ -189,16 +215,14 @@ def test_upscale_batch_maps_tile_progress_to_continuous_overall_progress(tmp_pat
         ),
     )
 
-    assert [item[:4] for item in reported] == [
-        (0.5, 2, "tile", 1),
-        (1.0, 2, "tile", 1),
-        (1, 2, "image", 1),
-        (1.5, 2, "tile", 2),
-        (2.0, 2, "tile", 2),
-        (2, 2, "image", 2),
-    ]
-    assert "第 1/2 张 · tile 1/2" in reported[0][4]
-    assert "第 2/2 张 · tile 2/2" in reported[4][4]
+    tile_reports = [item for item in reported if item[2] == "tile"]
+    assert len(tile_reports) == 4
+    assert tile_reports[0][0] == pytest.approx(0.525)
+    assert tile_reports[1][0] == pytest.approx(0.9)
+    assert tile_reports[2][0] == pytest.approx(1.525)
+    assert tile_reports[3][0] == pytest.approx(1.9)
+    assert "第 1/2 张 · tile 1/2" in tile_reports[0][4]
+    assert "第 2/2 张 · tile 2/2" in tile_reports[3][4]
 
 
 def test_upscale_batch_cancel_flag_propagates_cancellation(tmp_path):

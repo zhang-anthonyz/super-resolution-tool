@@ -86,6 +86,8 @@ def test_probe_video_parses_ffprobe_json(tmp_path, monkeypatch):
         "total_frames": 50,
         "has_audio": True,
         "duration": 0.0,
+        "sar": "",
+        "rotation": None,
     }
 
 
