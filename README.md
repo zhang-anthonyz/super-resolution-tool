@@ -8,6 +8,7 @@
 ![UI](https://img.shields.io/badge/UI-PySide6%206.12-41CD52?logo=qt&logoColor=white)
 ![Runtime](https://img.shields.io/badge/Inference-ONNX%20Runtime%20%28DirectML%20%2F%20CUDA%29-005CED)
 ![Tests](https://img.shields.io/badge/Tests-221%20passed-success)
+![License](https://img.shields.io/badge/License-MIT-blue)
 
 ---
 
@@ -28,6 +29,7 @@
 - [配置与环境变量](#配置与环境变量)
 - [日志与排查](#日志与排查)
 - [已知限制](#已知限制)
+- [路线图](#路线图)
 - [常见问题](#常见问题)
 - [许可与第三方资源](#许可与第三方资源)
 - [致谢](#致谢)
@@ -471,6 +473,22 @@ tile 4/9 · 17ms/块 · 剩余 0.08s              # 逐块进度（默认每若�
 
 ---
 
+## 路线图
+
+核心功能已全部落地：环境检测与后端选择、ONNX 推理引擎（DirectML / CUDA / OpenVINO / CPU）、
+Vulkan 引擎（ncnn）、图片管线（单张 / 批量 / 尺寸与压缩策略）、视频管线（逐帧 + 硬件编码 + 音频 remux）、
+界面与打包（四页导航 / 对比预览 / 绿色免安装产物）、视觉与模型打磨（7 超分 + 2 降噪）。
+
+待办：
+
+- **NVIDIA 真机验证**：CUDA / TensorRT 路径已按 execution provider 实现，但开发机为 AMD，尚缺实测；
+- **CI**：GitHub Actions 跑单元测试（GPU 用例自动 skip）与离屏 UI 审计脚本；
+- **更多模型**：DRUNet / DPIR 一类纯 CNN 盲降噪（SCUNet 的公开 ONNX 在 DirectML 上会进程级崩溃，已排除）、
+  Anime4KCPP 集成（`config.example.yaml` 已预留路径）；
+- **配置接线**：让 `config.yaml` 的 `inference` / `video` 段落真正生效（目前只有 `paths` 段落被读取）。
+
+---
+
 ## 常见问题
 
 **启动弹窗「未检测到独立显卡」？**
@@ -497,8 +515,7 @@ SwinIR 单会话加载约 3 s、单块推理更重；换来的收益是干净图
 
 ## 许可与第三方资源
 
-- **本仓库代码**：尚未添加 `LICENSE` 文件（发布前需选定，如 MIT / Apache-2.0）；
-  在此之前，仓库代码默认保留全部权利。
+- **本仓库代码**：[MIT](LICENSE)。该许可只覆盖仓库中的源代码，不覆盖下列模型权重与第三方二进制。
 - **内置模型**：均为公开预训练权重的格式转换，各自授权见 [`models/LICENSES.md`](models/LICENSES.md)，
   其中 `4x-UltraSharp_fp16` **无明确授权、不可商业分发**。模型权重不入库（`.gitignore`），
   由使用者按来源自行准备。
