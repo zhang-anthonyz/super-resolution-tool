@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 from typing import Optional, Sequence
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QThread
 from PySide6.QtGui import QColor, QFont, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (
     QApplication,
@@ -43,11 +43,19 @@ from ..core.types import (
     VideoCodec,
 )
 from ..pipelines.ffmpeg_utils import probe_video
+from ..pipelines.image_pipeline import (
+    PERCENT_DEFAULT as _PERCENT_DEFAULT,
+    PERCENT_MAX as _PERCENT_MAX,
+    PERCENT_MIN as _PERCENT_MIN,
+    RESIZE_MODE_PERCENT,
+    resize_summary,
+)
 from . import ui_logic
 from . import theme
 from .ui_logic import BackendChoice
 from .model_selector import ModelSelector
 from .widgets import ChevronComboBox
+from . import compare_view
 from .workers import ImageUpscaleWorker, VideoUpscaleWorker
 
 
@@ -56,6 +64,11 @@ _PROGRESS_COLOR_SUCCESS = theme.SUCCESS
 _PROGRESS_COLOR_ERROR = theme.DANGER
 _PROGRESS_COLOR_PARTIAL = theme.WARNING
 _PROGRESS_COLOR_CANCELLED = theme.NEUTRAL
+
+#: Height of the inline comparison area. The card sits at the end of
+#: a scroll page next to a tall log panel, so it needs room of its own:
+#: at less than this the block strip squeezes the image area flat.
+_COMPARE_VIEW_MIN_HEIGHT = 560
 
 
 VIDEO_CODEC_OPTIONS: tuple[tuple[VideoCodec, str], ...] = (
@@ -181,9 +194,10 @@ class MainWindow(QMainWindow):
         )
         self._image_worker: Optional[ImageUpscaleWorker] = None
         self._video_worker: Optional[VideoUpscaleWorker] = None
+        self._preview_worker: Optional[QThread] = None
+        self._preview_token = 0
+        self._compare_dialog: Optional[compare_view.ComparisonDialog] = None
         self._image_progress_key: Optional[tuple[int, str]] = None
-        self._image_progress_last_time = 0.0
-        self._image_progress_last_percent = -1.0
         self._video_progress_last_time = 0.0
         self._video_progress_last_frame = -1
         self._settings = load_settings()
@@ -534,13 +548,40 @@ class MainWindow(QMainWindow):
         self.image_resize_mode_combo = ChevronComboBox()
         self.image_resize_mode_combo.addItem("保持超分尺寸", "keep")
         self.image_resize_mode_combo.addItem("回缩到原图尺寸", "restore")
+        self.image_resize_mode_combo.addItem(
+            "按百分比等比例缩放（相对超分结果）", "percent"
+        )
+        self.image_resize_percent_spin = QSpinBox()
+        self.image_resize_percent_spin.setRange(
+            _PERCENT_MIN, _PERCENT_MAX
+        )
+        self.image_resize_percent_spin.setSingleStep(5)
+        self.image_resize_percent_spin.setValue(_PERCENT_DEFAULT)
+        self.image_resize_percent_spin.setSuffix(" %")
+        self.image_resize_percent_spin.setToolTip(
+            f"按超分结果的百分比等比例缩放输出（{_PERCENT_MIN}–{_PERCENT_MAX}%，"
+            "100% 等于保持超分尺寸）"
+        )
+        self.image_resize_percent_spin.setVisible(False)
+        resize_row = QWidget()
+        resize_layout = QHBoxLayout(resize_row)
+        resize_layout.setContentsMargins(0, 0, 0, 0)
+        resize_layout.setSpacing(8)
+        resize_layout.addWidget(self.image_resize_mode_combo, 1)
+        resize_layout.addWidget(self.image_resize_percent_spin)
+        self.image_resize_mode_combo.currentIndexChanged.connect(
+            self._sync_resize_percent_state
+        )
+        self.image_resize_percent_spin.valueChanged.connect(
+            self._sync_resize_percent_state
+        )
         self.image_compression_combo = ChevronComboBox()
         self.image_compression_combo.addItem("高质量", "high")
         self.image_compression_combo.addItem("高压缩", "compressed")
         self.image_compression_combo.addItem("无损 / 最高质量", "lossless")
         output_form.addRow(self._form_label("输出目录"), output_row)
         output_form.addRow(self._form_label("倍率"), self.image_scale_selector)
-        output_form.addRow(self._form_label("输出尺寸"), self.image_resize_mode_combo)
+        output_form.addRow(self._form_label("输出尺寸"), resize_row)
         output_form.addRow(self._form_label("输出压缩"), self.image_compression_combo)
         output_form.addRow(self._form_label(""), self.image_overwrite_check)
         output_body.addLayout(output_form)
@@ -572,6 +613,43 @@ class MainWindow(QMainWindow):
         self.image_log = LogPanel()
         self.image_log.setMinimumHeight(158)
         layout.addWidget(self.image_log)
+
+        self.image_scroll = scroll
+        self.image_compare_card, compare_body = self._make_card(
+            "对比预览",
+            "单张图片任务完成后自动载入：鼠标移动查看同一像素块，或拖动垂直滑块对比原图与超分结果",
+        )
+        self.image_compare_panel = compare_view.ComparisonPanel()
+        # The card lives at the end of a scroll page, so it needs real height of
+        # its own; the block strip and the wipe view both get room from it.
+        self.image_compare_panel.view.setMinimumHeight(_COMPARE_VIEW_MIN_HEIGHT)
+        self.image_compare_panel.add_action(
+            self._compare_button("适应窗口", self.image_compare_view_fit)
+        )
+        self.image_compare_panel.add_action(
+            self._compare_button("1:1 像素", self.image_compare_view_pixels)
+        )
+        self.image_compare_panel.add_action(
+            self._compare_button("大窗口对比", self.open_image_compare_window)
+        )
+        self.image_compare_panel.add_action(
+            self._compare_button("关闭预览", self.close_image_compare)
+        )
+        compare_body.addWidget(self.image_compare_panel, 1)
+        compare_body.addWidget(
+            self._value_label(
+                "像素块对比：鼠标在图上移动，下方同步显示原图与输出同一区域；滚轮放大取样倍率\n"
+                "垂直滑块对比：拖动分割线切换原图/输出，拖其它位置平移，滚轮缩放\n"
+                "觉得太小就点「大窗口对比」：独立窗口可任意拉伸或最大化，尺寸会被记住",
+            )
+        )
+        layout.addWidget(self.image_compare_card, 1)
+        self.image_compare_card.setVisible(False)
+
+        # The panel owns the widgets; keep these names for the rest of the window.
+        self.image_compare_view = self.image_compare_panel.view
+        self.image_compare_mode_combo = self.image_compare_panel.mode_combo
+        self.image_compare_status = self.image_compare_panel.status
         return scroll
 
     def _build_video_tab(self) -> QWidget:
@@ -684,6 +762,16 @@ class MainWindow(QMainWindow):
         resize_index = self.image_resize_mode_combo.findData(image_resize_mode)
         if resize_index >= 0:
             self.image_resize_mode_combo.setCurrentIndex(resize_index)
+        try:
+            percent = int(
+                self._settings.get("image_resize_percent", _PERCENT_DEFAULT)
+            )
+        except (TypeError, ValueError):
+            percent = _PERCENT_DEFAULT
+        self.image_resize_percent_spin.setValue(
+            max(_PERCENT_MIN, min(_PERCENT_MAX, percent))
+        )
+        self._sync_resize_percent_state()
         compression_profile = str(
             self._settings.get("image_compression_profile") or "high"
         )
@@ -736,6 +824,7 @@ class MainWindow(QMainWindow):
             "video_output_dir": self.video_output_dir_edit.text().strip(),
             "image_overwrite": self.image_overwrite_check.isChecked(),
             "image_resize_mode": self.image_resize_mode_combo.currentData(),
+            "image_resize_percent": self.image_resize_percent_spin.value(),
             "image_compression_profile": self.image_compression_combo.currentData(),
             "video_overwrite": self.video_overwrite_check.isChecked(),
             "video_codec": self.current_video_codec().value,
@@ -830,6 +919,36 @@ class MainWindow(QMainWindow):
         if folder:
             self.image_output_dir_edit.setText(folder)
 
+    def _sync_resize_percent_state(self) -> None:
+        """The percent field only applies to the percentage resize mode."""
+        percent_mode = (
+            self.image_resize_mode_combo.currentData() == RESIZE_MODE_PERCENT
+        )
+        self.image_resize_percent_spin.setVisible(percent_mode)
+        if percent_mode:
+            mode = self.resize_mode()
+            self.image_resize_percent_spin.setToolTip(
+                f"输出尺寸 = 超分结果 × {self.image_resize_percent_spin.value()}%"
+                f"（{mode}）"
+            )
+
+    def resize_mode(self) -> str:
+        """Requested output-size handling (keep / restore / percent)."""
+        return str(self.image_resize_mode_combo.currentData() or "keep")
+
+    def resize_percent(self) -> Optional[float]:
+        """Percentage of the super-resolved result, or None when unused."""
+        if self.resize_mode() != RESIZE_MODE_PERCENT:
+            return None
+        return float(self.image_resize_percent_spin.value())
+
+    def resize_options(self) -> tuple[bool, Optional[float]]:
+        """``(resize_to_original, resize_percent)`` for the pipeline."""
+        return (
+            self.resize_mode() == "restore",
+            self.resize_percent(),
+        )
+
     def _browse_video_input(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
             self,
@@ -885,14 +1004,12 @@ class MainWindow(QMainWindow):
         backend = self.image_model_selector.current_backend()
         denoise_strength = self.image_model_selector.denoise_strength()
         sharpen_strength = self.image_model_selector.sharpen_strength()
-        resize_to_original = self.image_resize_mode_combo.currentData() == "restore"
+        resize_to_original, resize_percent = self.resize_options()
         compression_profile = str(
             self.image_compression_combo.currentData() or "high"
         )
         out_dir = ui_logic.resolve_project_path(out_dir_text)
         self._image_progress_key = None
-        self._image_progress_last_time = 0.0
-        self._image_progress_last_percent = -1.0
         self._reset_image_progress()
 
         self.image_log.append(
@@ -903,7 +1020,8 @@ class MainWindow(QMainWindow):
         self.image_log.append(
             "Info",
             f"加载模型：{model.name} / {ui_logic.backend_label(backend, self.gpu)} / "
-            f"{scale}x / 降噪强度 {denoise_text} / "
+            f"{scale}x / 输出尺寸 {resize_summary(resize_to_original, resize_percent)} / "
+            f"降噪强度 {denoise_text} / "
             f"边缘锐化 {sharpen_strength:.2f}",
         )
         self.image_log.append(
@@ -927,9 +1045,11 @@ class MainWindow(QMainWindow):
             sharpen_strength=sharpen_strength,
             resize_to_original=resize_to_original,
             compression_profile=compression_profile,
+            resize_percent=resize_percent,
             parent=self,
         )
         worker.progress.connect(self._on_image_progress)
+        worker.log.connect(self._on_image_log)
         worker.finished.connect(self._on_image_finished)
         worker.error.connect(self._on_image_error)
         worker.cancelled.connect(self._on_image_cancelled)
@@ -1058,6 +1178,173 @@ class MainWindow(QMainWindow):
     def _on_image_runtime(self, label: str) -> None:
         self.image_log.append("Info", f"实际推理后端：{label}")
 
+    def _compare_button(self, text: str, slot) -> QPushButton:
+        return compare_view.ghost_button(text, slot)
+
+    def _on_image_log(self, level: str, message: str) -> None:
+        """Step log lines produced by the pipeline (decode / tiles / encode)."""
+        self.image_log.append(level, message)
+
+    # ---- comparison preview --------------------------------------------------
+
+    def _hide_compare_preview(self) -> None:
+        self._preview_token += 1
+        self.image_compare_card.setVisible(False)
+        self.image_compare_view.set_pair(None)
+        if self._compare_dialog is not None:
+            self._compare_dialog.close()
+        self._cleanup_preview_worker()
+
+    def close_image_compare(self) -> None:
+        self._hide_compare_preview()
+
+    def _on_compare_mode_changed(self, mode: object = None) -> None:
+        """Keep both comparison surfaces (inline card and big window) in step."""
+        mode = str(
+            mode
+            or self.image_compare_mode_combo.currentData()
+            or compare_view.MODE_BLOCK
+        )
+        self.image_compare_view.set_mode(mode)
+        if self._compare_dialog is not None:
+            self._compare_dialog.panel.set_mode(mode)
+
+    def _on_compare_window_mode_changed(self, mode: str) -> None:
+        self.image_compare_panel.set_mode(mode)
+
+    def image_compare_view_fit(self) -> None:
+        self.image_compare_view.fit_to_view()
+        if self._compare_dialog is not None:
+            self._compare_dialog.view().fit_to_view()
+
+    def image_compare_view_pixels(self) -> None:
+        self.image_compare_view.one_to_one()
+        if self._compare_dialog is not None:
+            self._compare_dialog.view().one_to_one()
+
+    def open_image_compare_window(self) -> None:
+        """Open the same comparison in a big, resizable window."""
+        if not self.image_compare_view.has_pair():
+            return
+        dialog = self._compare_dialog
+        if dialog is None:
+            dialog = compare_view.ComparisonDialog(self)
+            dialog.panel.mode_changed.connect(self._on_compare_window_mode_changed)
+            dialog.finished.connect(self._on_compare_window_closed)
+            self._compare_dialog = dialog
+            self._apply_saved_compare_window(dialog)
+
+        source = self.image_compare_view
+        target = dialog.view()
+        target.set_pair(source.pair())
+        dialog.panel.set_mode(source.mode())
+        target.set_split_ratio(source.split_ratio())
+        target.set_zoom(source.zoom())
+        dialog.panel.set_summary(self.image_compare_status.text())
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def _apply_saved_compare_window(self, dialog) -> None:
+        """Restore the size the big window had last time."""
+        saved = self._settings.get("image_compare_window")
+        maximized = False
+        if isinstance(saved, dict):
+            width = int(saved.get("width") or 0)
+            height = int(saved.get("height") or 0)
+            if width > 400 and height > 300:
+                dialog.resize(width, height)
+            maximized = bool(saved.get("maximized", False))
+        if maximized:
+            dialog.showMaximized()
+
+    def _store_compare_window_state(self) -> None:
+        dialog = self._compare_dialog
+        if dialog is None:
+            return
+        maximized = dialog.isMaximized()
+        size = dialog.normalGeometry().size() if maximized else dialog.size()
+        self._settings["image_compare_window"] = {
+            "width": int(size.width()),
+            "height": int(size.height()),
+            "maximized": maximized,
+        }
+        save_settings(self._window_settings())
+
+    def _on_compare_window_closed(self, _result: int) -> None:
+        """Remember the window's size and adopt its mode/zoom for the card."""
+        self._store_compare_window_state()
+        self._sync_compare_from_window()
+
+    def _sync_compare_from_window(self) -> None:
+        """Adopt the big window's mode/zoom when it closes."""
+        dialog = self._compare_dialog
+        if dialog is None:
+            return
+        source = dialog.view()
+        self.image_compare_panel.set_mode(source.mode())
+        self.image_compare_view.set_split_ratio(source.split_ratio())
+        self.image_compare_view.set_zoom(source.zoom())
+
+    def _cleanup_preview_worker(self) -> None:
+        worker = self._preview_worker
+        self._preview_worker = None
+        if worker is not None:
+            worker.deleteLater()
+
+    def _maybe_show_compare_preview(self, results: object) -> None:
+        """Show an input/output comparison once a single-image task finished."""
+        results = list(results or [])
+        usable = [
+            result
+            for result in results
+            if getattr(result, "ok", False)
+            and getattr(result, "input_path", None)
+            and getattr(result, "output_path", None)
+        ]
+        if len(results) != 1 or len(usable) != 1:
+            self._hide_compare_preview()
+            return
+
+        result = usable[0]
+        self._preview_token += 1
+        token = self._preview_token
+        self._cleanup_preview_worker()
+        self.image_compare_card.setVisible(True)
+        self.image_compare_view.set_pair(None)
+        self.image_compare_status.setText("正在载入对比图…")
+        worker = compare_view.PreviewLoadWorker(
+            token, result.input_path, result.output_path, parent=self
+        )
+        worker.loaded.connect(self._on_preview_loaded)
+        worker.failed.connect(self._on_preview_failed)
+        self._preview_worker = worker
+        worker.start()
+
+    def _on_preview_loaded(self, token: object, pair: object) -> None:
+        self._cleanup_preview_worker()
+        if token != self._preview_token:
+            return
+        self.image_compare_view.set_pair(pair)
+        summary = (
+            f"原图 {pair.input_true_text} → 输出 {pair.output_true_text} · "
+            f"{pair.scaled_note}"
+        )
+        self.image_compare_status.setText(summary)
+        if self._compare_dialog is not None:
+            self._compare_dialog.view().set_pair(pair)
+            self._compare_dialog.panel.set_summary(summary)
+        # Scroll just enough to show the card's header (its view is tall).
+        self.image_scroll.ensureWidgetVisible(self.image_compare_status, 0, 40)
+        self.image_log.append("Info", compare_view.format_pair_summary(pair))
+
+    def _on_preview_failed(self, token: object, message: str) -> None:
+        self._cleanup_preview_worker()
+        if token != self._preview_token:
+            return
+        self.image_compare_status.setText("对比图载入失败")
+        self.image_log.append("Warning", f"对比预览不可用：{message}")
+
     def _on_video_progress(self, info: ProgressInfo) -> None:
         self.video_progress.setRange(0, 1000)
         self.video_progress.setValue(ui_logic.running_progress_value(info.percent))
@@ -1068,33 +1355,23 @@ class MainWindow(QMainWindow):
         self.video_log.append("Info", f"实际推理后端：{label}")
 
     def _log_image_progress(self, info: ProgressInfo) -> None:
+        """Log the start of each image in a batch.
+
+        Per-step lines (decode, every N-th tile, encode) arrive through
+        ``_on_image_log``; echoing the raw progress here as well would double
+        every tile in the panel.
+        """
         source_name = info.source_name
-        image_key = None
-        if info.image_index is not None and source_name is not None:
-            image_key = (int(info.image_index), source_name)
-
-        if image_key is not None and image_key != self._image_progress_key:
-            self._image_progress_key = image_key
-            self._image_progress_last_percent = -1.0
-            self.image_log.append(
-                "Info",
-                f"处理 {source_name}（{info.percent:.1f}%）",
-            )
-
-        now = time.monotonic()
-        should_log_tile = (
-            info.phase == "tile"
-            and info.message
-            and (
-                info.percent >= self._image_progress_last_percent + 10.0
-                or now - self._image_progress_last_time >= 1.0
-                or info.percent >= 99.999
-            )
+        if info.image_index is None or source_name is None:
+            return
+        image_key = (int(info.image_index), source_name)
+        if image_key == self._image_progress_key:
+            return
+        self._image_progress_key = image_key
+        self.image_log.append(
+            "Info",
+            f"处理 {source_name}（第 {info.image_index}/{info.image_total} 张）",
         )
-        if should_log_tile:
-            self._image_progress_last_time = now
-            self._image_progress_last_percent = info.percent
-            self.image_log.append("Info", info.message)
 
     def _log_video_progress(self, info: ProgressInfo) -> None:
         now = time.monotonic()
@@ -1154,6 +1431,7 @@ class MainWindow(QMainWindow):
             f"完成统计：成功 {ok_count} / 失败 {fail_count} / "
             f"总耗时 {total_elapsed:.1f}s",
         )
+        self._maybe_show_compare_preview(results)
         self._cleanup_image_worker()
 
     def _on_image_error(self, message: str) -> None:

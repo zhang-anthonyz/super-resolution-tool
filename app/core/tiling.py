@@ -132,6 +132,64 @@ def merge_tiles(
     return accumulator / weights
 
 
+def feather_ramp(length: int) -> np.ndarray:
+    """Pixel-centre weights fading from ~0 at the edge to ~1 at ``length``."""
+    length = max(0, int(length))
+    if length <= 0:
+        return np.empty((0,), dtype=np.float32)
+    return (np.arange(length, dtype=np.float32) + 0.5) / np.float32(length)
+
+
+def blend_tile(
+    dst: np.ndarray,
+    src: np.ndarray,
+    band_x: int = 0,
+    band_y: int = 0,
+) -> None:
+    """Write one tile into ``dst``, cross-fading its left/top overlap bands.
+
+    ``dst`` and ``src`` are uint8 HWC arrays of the same shape (``dst`` may be a
+    strided view of the full output image). ``band_x``/``band_y`` are the widths,
+    in output pixels, of the region shared with the tile to the left/above —
+    they are the only pixels that need arithmetic; everything else is a direct
+    copy. Blending linearly across the shared band keeps the seam from stepping
+    (the tiled output is assembled from independently inferred tiles) without
+    the full-size float accumulator the previous implementation needed.
+    """
+    height, width = src.shape[:2]
+    by = max(0, min(int(band_y), height))
+    bx = max(0, min(int(band_x), width))
+
+    if by == 0 and bx == 0:
+        dst[...] = src
+        return
+
+    if by < height or bx < width:
+        dst[by:, bx:] = src[by:, bx:]
+
+    if by:
+        rows = slice(0, by)
+        wy = feather_ramp(by).reshape(by, 1, 1)
+        if bx:
+            cols = slice(0, bx)
+            wx = feather_ramp(bx).reshape(1, bx, 1)
+            _blend_region(dst[rows, cols], src[rows, cols], wy * wx)
+        if bx < width:
+            _blend_region(dst[rows, bx:], src[rows, bx:], wy)
+    if bx:
+        rows = slice(by, height)
+        wx = feather_ramp(bx).reshape(1, bx, 1)
+        _blend_region(dst[rows, :bx], src[rows, :bx], wx)
+
+
+def _blend_region(dst: np.ndarray, src: np.ndarray, weight: np.ndarray) -> None:
+    """Cross-fade a (thin) overlap band between two uint8 images."""
+    blended = src.astype(np.float32) * weight + dst.astype(np.float32) * (
+        1.0 - weight
+    )
+    dst[...] = np.rint(blended).astype(np.uint8)
+
+
 def preprocess_image(
     image: np.ndarray,
     channel_order: str = "RGB",
@@ -154,7 +212,10 @@ def preprocess_image(
         arr = arr[..., ::-1]
 
     mean, std = normalize
-    arr = (arr - mean) / std
+    if mean != 0.0 or std != 1.0:
+        # The default 0-1 mapping is an identity, and every built-in model uses
+        # it; skipping it avoids two extra passes over the whole image.
+        arr = (arr - mean) / std
     chw = np.transpose(arr, (2, 0, 1))
     return np.ascontiguousarray(chw[None, ...], dtype=dtype)
 

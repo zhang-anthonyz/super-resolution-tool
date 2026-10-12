@@ -2,6 +2,8 @@ import numpy as np
 import pytest
 
 from app.core.tiling import (
+    blend_tile,
+    feather_ramp,
     merge_tiles,
     postprocess_tensor,
     preprocess_image,
@@ -80,3 +82,67 @@ def test_merge_tiles_validates_scaled_tile_shape():
 
     with pytest.raises(ValueError, match="does not match"):
         merge_tiles([(region, bad_tile)], output_height=4, output_width=4, scale=2)
+
+
+def test_blend_tile_copies_when_there_is_no_neighbour():
+    dst = np.full((4, 4, 3), 10, dtype=np.uint8)
+    src = np.full((4, 4, 3), 200, dtype=np.uint8)
+
+    blend_tile(dst, src)
+
+    np.testing.assert_array_equal(dst, src)
+
+
+def test_blend_tile_ramps_across_the_left_band():
+    """Pixel 0 must stay with the neighbour, the band end must be the new tile."""
+    dst = np.full((1, 12, 3), 50, dtype=np.uint8)
+    src = np.full((1, 12, 3), 200, dtype=np.uint8)
+
+    blend_tile(dst, src, band_x=8)
+
+    row = dst[0, :, 0].astype(int)
+    # Untouched beyond the band.
+    assert row[8] == 200 and row[11] == 200
+    # Monotonic cross-fade inside it, starting near the neighbour's value.
+    assert row[0] <= 60
+    assert all(b >= a for a, b in zip(row[:8], row[1:8]))
+    assert row[7] >= 190
+
+
+def test_blend_tile_ramps_vertically():
+    dst = np.full((12, 1, 3), 50, dtype=np.uint8)
+    src = np.full((12, 1, 3), 200, dtype=np.uint8)
+
+    blend_tile(dst, src, band_y=8)
+
+    column = dst[:, 0, 0].astype(int)
+    assert column[0] <= 60
+    assert all(b >= a for a, b in zip(column[:8], column[1:8]))
+    assert column[8] == 200
+
+
+def test_blend_tile_fades_both_bands_in_the_corner():
+    dst = np.full((10, 10, 3), 40, dtype=np.uint8)
+    src = np.full((10, 10, 3), 240, dtype=np.uint8)
+
+    blend_tile(dst, src, band_x=6, band_y=6)
+
+    corner = int(dst[0, 0, 0])           # inside both bands: neighbour wins
+    top_edge = int(dst[0, 9, 0])         # inside the top band only
+    left_edge = int(dst[9, 0, 0])        # inside the left band only
+    interior = int(dst[9, 9, 0])         # outside both bands: the new tile
+
+    assert corner < top_edge and corner < left_edge
+    assert top_edge == left_edge
+    assert interior == 240
+    assert dst.dtype == np.uint8
+
+
+def test_feather_ramp_is_monotonic_and_normalised():
+    ramp = feather_ramp(10)
+
+    assert ramp.dtype == np.float32
+    assert ramp.shape == (10,)
+    assert np.all(np.diff(ramp) > 0)
+    assert 0.0 < ramp[0] < 0.1 and 0.9 < ramp[-1] < 1.0
+    assert feather_ramp(0).shape == (0,)
