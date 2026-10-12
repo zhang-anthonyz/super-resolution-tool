@@ -14,6 +14,7 @@
 ## 目录
 
 - [简介](#简介)
+- [软件运行截图](#软件运行截图)
 - [特性](#特性)
 - [界面与工作流](#界面与工作流)
 - [快速开始](#快速开始)
@@ -54,6 +55,24 @@
 **运行前提**：Windows 10 / 11 64 位 + NVIDIA / AMD / Intel 独立显卡（建议显存 ≥ 4 GB，SwinIR 系列建议 ≥ 6 GB）。
 
 ---
+
+## 软件运行截图
+
+图片超分页：输入列表、模型与后端、输出与画质（截图取自打包版的实际运行）
+
+<img width="2560" height="1369" alt="图片超分页" src="https://github.com/user-attachments/assets/0d66d35d-b09d-4823-aae8-c06c11e7f36d" />
+
+一次实际任务：进度、分步运行日志与结果（Vulkan 后端，输出为 4x 的 50% 百分比缩放）
+
+<img width="2560" height="1380" alt="运行中的分步日志" src="https://github.com/user-attachments/assets/774794f7-b274-4640-af58-d16f20f11683" />
+
+对比预览 · 滑块对比：拖动分割线，左侧原图、右侧超分输出
+
+<img width="2560" height="1385" alt="滑块对比" src="https://github.com/user-attachments/assets/3486783f-be78-46af-b490-bf628b050372" />
+
+对比预览 · 放大镜对比：光标处的细节在两个放大格中同步呈现
+
+<img width="2560" height="1391" alt="放大镜对比" src="https://github.com/user-attachments/assets/02d287b3-d985-4c6c-a86c-edeeff726be2" />
 
 ## 特性
 
