@@ -90,3 +90,10 @@ pyinstaller SuperResolutionTool.spec     # 打包绿色免安装目录
 - [x] W5 视频管线
 - [x] W6 UI+打包
 - [x] W7 打磨（视觉重构、模型扩充、降噪改造）
+
+## 软件运行截图
+<img width="2560" height="1369" alt="image" src="https://github.com/user-attachments/assets/0d66d35d-b09d-4823-aae8-c06c11e7f36d" />
+<img width="2560" height="1380" alt="image" src="https://github.com/user-attachments/assets/774794f7-b274-4640-af58-d16f20f11683" />
+<img width="2560" height="1385" alt="image" src="https://github.com/user-attachments/assets/3486783f-be78-46af-b490-bf628b050372" />
+<img width="2560" height="1391" alt="image" src="https://github.com/user-attachments/assets/02d287b3-d985-4c6c-a86c-edeeff726be2" />
+
