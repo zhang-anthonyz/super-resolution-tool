@@ -1,7 +1,8 @@
 """Offscreen UI preview + rendering diagnostics for the PySide6 shell.
 
 Renders every page of the main window to PNG files without opening a real
-window (top and scrolled-to-bottom views), then verifies programmatically that
+window (top and scrolled-to-bottom views, plus the comparison page with a demo
+pair loaded in both modes), then verifies programmatically that
 
 * no interactive control collapsed to an unclickable size,
 * combo chevrons and spin buttons actually painted pixels,
@@ -26,8 +27,10 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from PySide6.QtCore import QPoint, Qt  # noqa: E402
-from PySide6.QtGui import QImage  # noqa: E402
+import numpy as np  # noqa: E402
+from PIL import Image  # noqa: E402
+from PySide6.QtCore import QPoint, QPointF, Qt  # noqa: E402
+from PySide6.QtGui import QImage, QMouseEvent  # noqa: E402
 from PySide6.QtWidgets import (  # noqa: E402
     QApplication,
     QCheckBox,
@@ -45,7 +48,7 @@ from PySide6.QtWidgets import (  # noqa: E402
 )
 
 from app.core.types import GpuInfo, GpuType, GpuVendor  # noqa: E402
-from app.ui import theme  # noqa: E402
+from app.ui import compare_view, theme  # noqa: E402
 from app.ui.main_window import MainWindow  # noqa: E402
 
 INTERACTIVE = (
@@ -190,11 +193,20 @@ def check_indicators(stage: str, window, image: QImage) -> list[str]:
     return problems
 
 
+def is_content_card(widget) -> bool:
+    """Card whose body is a canvas of arbitrary pixels (the comparison view).
+
+    Its dominant colour is whatever image is loaded, so surface and palette-leak
+    checks would only report the photo itself.
+    """
+    return widget.findChild(QWidget, "compareCanvas") is not None
+
+
 def check_surfaces(stage: str, window) -> list[str]:
     problems: list[str] = []
     for object_name, (expected, widget_class) in SURFACES.items():
         for widget in window.findChildren(widget_class, object_name):
-            if not widget.isVisibleTo(window):
+            if not widget.isVisibleTo(window) or is_content_card(widget):
                 continue
             color, share = dominant_color(widget)
             allowed = {value.upper() for value in expected}
@@ -211,7 +223,7 @@ def check_palette_leak(stage: str, window) -> list[str]:
     targets = ((QFrame, "card"), (QFrame, "headerCard"), (QFrame, "sidebar"))
     for widget_class, object_name in targets:
         for widget in window.findChildren(widget_class, object_name):
-            if not widget.isVisibleTo(window):
+            if not widget.isVisibleTo(window) or is_content_card(widget):
                 continue
             hits, total = count_color(widget, PALETTE_LEAK)
             if total and hits * 100 // total > 0:
@@ -318,7 +330,7 @@ def check_text_present(stage: str, window) -> list[str]:
 def check_no_horizontal_overflow(window) -> list[str]:
     """Scroll pages must fit the viewport: horizontal clipping is not scrollable."""
     problems: list[str] = []
-    for page in (window.image_tab, window.video_tab, window.settings_tab):
+    for page in (window.image_tab, window.video_tab, window.compare_tab, window.settings_tab):
         if not isinstance(page, QScrollArea):
             continue
         content = page.widget()
@@ -330,6 +342,87 @@ def check_no_horizontal_overflow(window) -> list[str]:
                 f"page content is {content.width()}px wide but the viewport is "
                 f"{page.viewport().width()}px ({overflow}px clipped, unscrollable)"
             )
+    return problems
+
+
+def write_demo_pair(folder: Path) -> tuple[Path, Path]:
+    """A small detailed original plus a sharper 4x 'super-resolved' output.
+
+    Diagonal stripes with a bit of noise: the lens has to show *something*
+    different between the two sides, and flat colour would hide the overlay.
+    """
+    width, height = 320, 240
+    yy, xx = np.mgrid[0:height, 0:width]
+    original = np.stack(
+        [
+            ((xx * 255 // (width - 1)) ^ (yy * 255 // (height - 1))).astype(np.uint8),
+            (yy * 255 // (height - 1)).astype(np.uint8),
+            ((xx + yy) * 255 // (width + height - 2)).astype(np.uint8),
+        ],
+        axis=-1,
+    )
+    upscaled = np.repeat(np.repeat(original, 4, axis=0), 4, axis=1)
+    input_path = folder / "demo-input.png"
+    output_path = folder / "demo-output-4x.png"
+    Image.fromarray(original).save(input_path)
+    Image.fromarray(upscaled).save(output_path)
+    return input_path, output_path
+
+
+def hover(view, x_share: float, y_share: float) -> None:
+    """Move the (virtual) cursor to a share of the view and let it repaint."""
+    rect = view.rect()
+    point = QPointF(
+        rect.left() + rect.width() * x_share,
+        rect.top() + rect.height() * y_share,
+    )
+    view.mouseMoveEvent(
+        QMouseEvent(
+            QMouseEvent.Type.MouseMove,
+            point,
+            point,
+            point,
+            Qt.MouseButton.NoButton,
+            Qt.MouseButton.NoButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+    )
+
+
+def stage_compare_view(window, app, out_dir: Path, tag: str) -> list[str]:
+    """Load a demo pair and audit both comparison modes on screen."""
+    problems: list[str] = []
+    with tempfile.TemporaryDirectory(prefix="srt-preview-images-") as folder:
+        pair = compare_view.load_preview_pair(*write_demo_pair(Path(folder)))
+
+    window.stack.setCurrentIndex(MainWindow.COMPARE_PAGE)
+    view = window.image_compare_view
+    view.set_pair(pair)
+    window.image_compare_panel.set_summary(compare_view.format_pair_summary(pair))
+    for _ in range(3):  # let the page settle before measuring the view
+        app.processEvents()
+
+    shots = (
+        (compare_view.MODE_LENS, 0.42, 0.34, "compare-lens"),
+        (compare_view.MODE_SLIDER, 0.30, 0.50, "compare-slider"),
+    )
+    for mode, x_share, y_share, name in shots:
+        window.image_compare_panel.set_mode(mode)
+        view.set_split_ratio(0.45)
+        app.processEvents()
+        hover(view, x_share, y_share)
+        app.processEvents()
+        image = window.grab().toImage()
+        image.save(str(out_dir / f"ui-{tag}-{name}.png"))
+        problems.extend(audit(name, window, image))
+
+    # 1:1 output pixels: the pannable, wheel-zoomable slider view.
+    window.image_compare_panel.set_mode(compare_view.MODE_SLIDER)
+    view.one_to_one()
+    app.processEvents()
+    image = window.grab().toImage()
+    image.save(str(out_dir / f"ui-{tag}-compare-slider-1to1.png"))
+    problems.extend(audit("compare-slider-1to1", window, image))
     return problems
 
 
@@ -373,8 +466,8 @@ def main() -> int:
     app.processEvents()
 
     pager = getattr(window, "stack", None) or getattr(window, "tabs", None)
-    pages = [window.image_tab, window.video_tab, window.settings_tab]
-    page_names = ["image", "video", "settings"]
+    pages = [window.image_tab, window.video_tab, window.compare_tab, window.settings_tab]
+    page_names = ["image", "video", "compare", "settings"]
     problems: list[str] = []
 
     for index, (page, page_name) in enumerate(zip(pages, page_names)):
@@ -403,6 +496,9 @@ def main() -> int:
                 )
             stage = page_name if not suffix else f"{page_name}{suffix}"
             problems.extend(audit(stage, window, image))
+
+    # The comparison page is only interesting with something loaded into it.
+    problems.extend(stage_compare_view(window, app, out_dir, args.tag))
 
     # The custom-scale spin box only enables itself in the 自定义 state; enable
     # it once on screen to confirm its spin buttons still render.

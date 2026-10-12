@@ -369,6 +369,36 @@ QPushButton#cancelButton:hover {
     color: $DANGER;
 }
 
+/* Segmented control (the comparison mode switch): two buttons that read as one
+   group, where the checked one is the active view. */
+QPushButton#segmentButton {
+    background-color: $SURFACE_MUTED;
+    border: 1px solid $BORDER;
+    border-radius: 8px;
+    padding: 5px 14px;
+    color: $TEXT_SECONDARY;
+    font-size: 12px;
+    font-weight: 500;
+}
+
+QPushButton#segmentButton:hover {
+    background-color: $SURFACE_HOVER;
+    border-color: $BORDER_STRONG;
+    color: $TEXT_STRONG;
+}
+
+QPushButton#segmentButton:checked {
+    background-color: $ACCENT_SOFT;
+    border-color: $ACCENT_SOFT_BORDER;
+    color: $ACCENT_SOFT_TEXT;
+    font-weight: 600;
+}
+
+QPushButton#segmentButton:checked:hover {
+    background-color: $ACCENT_SOFT;
+    border-color: $ACCENT;
+}
+
 /* Match the primary action height so the task row reads as one control group. */
 QPushButton#cancelButton {
     padding: 9px 20px;

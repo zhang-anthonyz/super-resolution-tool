@@ -65,11 +65,6 @@ _PROGRESS_COLOR_ERROR = theme.DANGER
 _PROGRESS_COLOR_PARTIAL = theme.WARNING
 _PROGRESS_COLOR_CANCELLED = theme.NEUTRAL
 
-#: Height of the inline comparison area. The card sits at the end of
-#: a scroll page next to a tall log panel, so it needs room of its own:
-#: at less than this the block strip squeezes the image area flat.
-_COMPARE_VIEW_MIN_HEIGHT = 560
-
 
 VIDEO_CODEC_OPTIONS: tuple[tuple[VideoCodec, str], ...] = (
     (VideoCodec.H264, "H.264"),
@@ -214,12 +209,16 @@ class MainWindow(QMainWindow):
     PAGE_META: tuple[tuple[str, str], ...] = (
         ("图片超分", "单张或批量图片超分 · 支持 jpg / png / webp"),
         ("视频超分", "逐帧超分与硬件编码 · 仅支持 8bit SDR"),
+        ("对比预览", "单张图片完成后自动载入 · 放大镜跟随光标或滑块左右对照"),
         ("设置", "推理设备信息与自定义模型管理"),
     )
 
+    #: Index of the comparison page, which single-image tasks switch to.
+    COMPARE_PAGE = 2
+
     #: Grouped navigation entries, in page order.
     NAV_SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
-        ("工作台", ("图片超分", "视频超分")),
+        ("工作台", ("图片超分", "视频超分", "对比预览")),
         ("系统", ("设置",)),
     )
 
@@ -312,9 +311,11 @@ class MainWindow(QMainWindow):
         self.stack = QStackedWidget()
         self.image_tab = self._build_image_tab()
         self.video_tab = self._build_video_tab()
+        self.compare_tab = self._build_compare_tab()
         self.settings_tab = self._build_settings_tab()
         self.stack.addWidget(self.image_tab)
         self.stack.addWidget(self.video_tab)
+        self.stack.addWidget(self.compare_tab)
         self.stack.addWidget(self.settings_tab)
         layout.addWidget(self.stack, 1)
         self._set_page(0)
@@ -615,14 +616,26 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.image_log)
 
         self.image_scroll = scroll
-        self.image_compare_card, compare_body = self._make_card(
+        return scroll
+
+    def _build_compare_tab(self) -> QWidget:
+        """The comparison canvas: one page, no scrolling, all height to the view.
+
+        Upscayl's layout lesson — the before/after view *is* the main surface,
+        not a card squeezed in next to the settings, so it gets the full page
+        and the settings stay on the image page.
+        """
+        page = QWidget()
+        page.setObjectName("pageBody")
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(2, 2, 8, 2)
+        layout.setSpacing(14)
+
+        card, body = self._make_card(
             "对比预览",
-            "单张图片任务完成后自动载入：鼠标移动查看同一像素块，或拖动垂直滑块对比原图与超分结果",
+            "单张图片任务完成后自动载入；批量为逐张输出，不逐个对照",
         )
         self.image_compare_panel = compare_view.ComparisonPanel()
-        # The card lives at the end of a scroll page, so it needs real height of
-        # its own; the block strip and the wipe view both get room from it.
-        self.image_compare_panel.view.setMinimumHeight(_COMPARE_VIEW_MIN_HEIGHT)
         self.image_compare_panel.add_action(
             self._compare_button("适应窗口", self.image_compare_view_fit)
         )
@@ -633,24 +646,18 @@ class MainWindow(QMainWindow):
             self._compare_button("大窗口对比", self.open_image_compare_window)
         )
         self.image_compare_panel.add_action(
-            self._compare_button("关闭预览", self.close_image_compare)
+            self._compare_button("返回图片超分", self.show_image_page)
         )
-        compare_body.addWidget(self.image_compare_panel, 1)
-        compare_body.addWidget(
-            self._value_label(
-                "像素块对比：鼠标在图上移动，下方同步显示原图与输出同一区域；滚轮放大取样倍率\n"
-                "垂直滑块对比：拖动分割线切换原图/输出，拖其它位置平移，滚轮缩放\n"
-                "觉得太小就点「大窗口对比」：独立窗口可任意拉伸或最大化，尺寸会被记住",
-            )
-        )
-        layout.addWidget(self.image_compare_card, 1)
-        self.image_compare_card.setVisible(False)
+        body.addWidget(self.image_compare_panel, 1)
+        layout.addWidget(card, 1)
 
         # The panel owns the widgets; keep these names for the rest of the window.
+        self.image_compare_card = card
         self.image_compare_view = self.image_compare_panel.view
-        self.image_compare_mode_combo = self.image_compare_panel.mode_combo
+        # Tagged so the offscreen audit knows this card is a canvas, not chrome.
+        self.image_compare_view.setObjectName("compareCanvas")
         self.image_compare_status = self.image_compare_panel.status
-        return scroll
+        return page
 
     def _build_video_tab(self) -> QWidget:
         scroll, layout = self._make_scroll_page()
@@ -744,6 +751,7 @@ class MainWindow(QMainWindow):
         self.image_cancel_button.clicked.connect(self.cancel_image_upscale)
         self.video_start_button.clicked.connect(self.start_video_upscale)
         self.video_cancel_button.clicked.connect(self.cancel_video_upscale)
+        self.image_compare_panel.mode_changed.connect(self._on_compare_mode_changed)
 
     def _apply_saved_settings(self) -> None:
         image_output = self._settings.get("image_output_dir")
@@ -817,26 +825,55 @@ class MainWindow(QMainWindow):
         video_denoise_model = self._settings.get("video_denoise_model")
         if isinstance(video_denoise_model, str) and video_denoise_model:
             self.video_model_selector.set_denoise_model(video_denoise_model)
+        self._apply_saved_compare_settings()
+
+    def _apply_saved_compare_settings(self) -> None:
+        """Restore the comparison mode and magnifications from last session."""
+        stored = self._settings.get("image_compare")
+        if not isinstance(stored, dict):
+            return
+        try:
+            # Mode first: switching modes resets the view zoom by design.
+            self.image_compare_panel.set_mode(
+                str(stored.get("mode") or compare_view.MODE_LENS)
+            )
+            self.image_compare_view.set_lens_zoom(
+                float(stored.get("lens_zoom", compare_view.LENS_DEFAULT_ZOOM))
+            )
+            self.image_compare_view.set_split_ratio(float(stored.get("split", 0.5)))
+        except (TypeError, ValueError):
+            pass
 
     def _window_settings(self) -> dict[str, object]:
-        return {
-            "image_output_dir": self.image_output_dir_edit.text().strip(),
-            "video_output_dir": self.video_output_dir_edit.text().strip(),
-            "image_overwrite": self.image_overwrite_check.isChecked(),
-            "image_resize_mode": self.image_resize_mode_combo.currentData(),
-            "image_resize_percent": self.image_resize_percent_spin.value(),
-            "image_compression_profile": self.image_compression_combo.currentData(),
-            "video_overwrite": self.video_overwrite_check.isChecked(),
-            "video_codec": self.current_video_codec().value,
-            "image_backend": self.image_model_selector.current_backend().value,
-            "video_backend": self.video_model_selector.current_backend().value,
-            "image_denoise_strength": self.image_model_selector.denoise_strength(),
-            "image_sharpen_strength": self.image_model_selector.sharpen_strength(),
-            "video_denoise_strength": self.video_model_selector.denoise_strength(),
-            "video_sharpen_strength": self.video_model_selector.sharpen_strength(),
-            "image_denoise_model": self.image_model_selector.denoise_model_name(),
-            "video_denoise_model": self.video_model_selector.denoise_model_name(),
-        }
+        # Start from what is already stored: keys that no widget owns (the big
+        # comparison window's geometry, for one) must survive a save.
+        settings: dict[str, object] = dict(self._settings)
+        settings.update(
+            {
+                "image_output_dir": self.image_output_dir_edit.text().strip(),
+                "video_output_dir": self.video_output_dir_edit.text().strip(),
+                "image_overwrite": self.image_overwrite_check.isChecked(),
+                "image_resize_mode": self.image_resize_mode_combo.currentData(),
+                "image_resize_percent": self.image_resize_percent_spin.value(),
+                "image_compression_profile": self.image_compression_combo.currentData(),
+                "video_overwrite": self.video_overwrite_check.isChecked(),
+                "video_codec": self.current_video_codec().value,
+                "image_backend": self.image_model_selector.current_backend().value,
+                "video_backend": self.video_model_selector.current_backend().value,
+                "image_denoise_strength": self.image_model_selector.denoise_strength(),
+                "image_sharpen_strength": self.image_model_selector.sharpen_strength(),
+                "video_denoise_strength": self.video_model_selector.denoise_strength(),
+                "video_sharpen_strength": self.video_model_selector.sharpen_strength(),
+                "image_denoise_model": self.image_model_selector.denoise_model_name(),
+                "video_denoise_model": self.video_model_selector.denoise_model_name(),
+                "image_compare": {
+                    "mode": self.image_compare_view.mode(),
+                    "lens_zoom": round(self.image_compare_view.lens_zoom(), 3),
+                    "split": round(self.image_compare_view.split_ratio(), 3),
+                },
+            }
+        )
+        return settings
 
     def _save_window_settings(self) -> None:
         save_settings(self._window_settings())
@@ -1187,25 +1224,25 @@ class MainWindow(QMainWindow):
 
     # ---- comparison preview --------------------------------------------------
 
+    def show_image_page(self) -> None:
+        """Back to the image page, keeping the loaded comparison intact."""
+        self._set_page(0)
+
     def _hide_compare_preview(self) -> None:
         self._preview_token += 1
-        self.image_compare_card.setVisible(False)
         self.image_compare_view.set_pair(None)
         if self._compare_dialog is not None:
             self._compare_dialog.close()
         self._cleanup_preview_worker()
 
     def close_image_compare(self) -> None:
+        """Drop the comparison and go back to the image page."""
         self._hide_compare_preview()
+        self.image_compare_status.setText("等待任务完成")
+        self.show_image_page()
 
-    def _on_compare_mode_changed(self, mode: object = None) -> None:
-        """Keep both comparison surfaces (inline card and big window) in step."""
-        mode = str(
-            mode
-            or self.image_compare_mode_combo.currentData()
-            or compare_view.MODE_BLOCK
-        )
-        self.image_compare_view.set_mode(mode)
+    def _on_compare_mode_changed(self, mode: str) -> None:
+        """Keep both comparison surfaces (page and big window) in step."""
         if self._compare_dialog is not None:
             self._compare_dialog.panel.set_mode(mode)
 
@@ -1239,6 +1276,7 @@ class MainWindow(QMainWindow):
         target.set_pair(source.pair())
         dialog.panel.set_mode(source.mode())
         target.set_split_ratio(source.split_ratio())
+        target.set_lens_zoom(source.lens_zoom())
         target.set_zoom(source.zoom())
         dialog.panel.set_summary(self.image_compare_status.text())
         dialog.show()
@@ -1284,6 +1322,7 @@ class MainWindow(QMainWindow):
         source = dialog.view()
         self.image_compare_panel.set_mode(source.mode())
         self.image_compare_view.set_split_ratio(source.split_ratio())
+        self.image_compare_view.set_lens_zoom(source.lens_zoom())
         self.image_compare_view.set_zoom(source.zoom())
 
     def _cleanup_preview_worker(self) -> None:
@@ -1293,7 +1332,12 @@ class MainWindow(QMainWindow):
             worker.deleteLater()
 
     def _maybe_show_compare_preview(self, results: object) -> None:
-        """Show an input/output comparison once a single-image task finished."""
+        """Show an input/output comparison once a single-image task finished.
+
+        A single image gets the whole comparison page (Upscayl switches its main
+        canvas to the comparison the same way); a batch produces many outputs
+        that would only flash past, so the page is left alone.
+        """
         results = list(results or [])
         usable = [
             result
@@ -1310,7 +1354,7 @@ class MainWindow(QMainWindow):
         self._preview_token += 1
         token = self._preview_token
         self._cleanup_preview_worker()
-        self.image_compare_card.setVisible(True)
+        self._set_page(self.COMPARE_PAGE)
         self.image_compare_view.set_pair(None)
         self.image_compare_status.setText("正在载入对比图…")
         worker = compare_view.PreviewLoadWorker(
@@ -1334,8 +1378,6 @@ class MainWindow(QMainWindow):
         if self._compare_dialog is not None:
             self._compare_dialog.view().set_pair(pair)
             self._compare_dialog.panel.set_summary(summary)
-        # Scroll just enough to show the card's header (its view is tall).
-        self.image_scroll.ensureWidgetVisible(self.image_compare_status, 0, 40)
         self.image_log.append("Info", compare_view.format_pair_summary(pair))
 
     def _on_preview_failed(self, token: object, message: str) -> None:
