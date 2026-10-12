@@ -4,10 +4,11 @@ Two ways to compare, both modelled on Upscayl's comparison views:
 
 * **放大镜对比** (``MODE_LENS``) — the output is shown fit-to-view and the mouse
   is the magnifier: a marker marks the spot under the cursor, and two magnified
-  cells float right next to the cursor showing the same region from the original
-  and from the super-resolved output. The eye never leaves the cursor, which is
-  what makes pixel peeping work on a big image: there is no separate strip to
-  look at, and the lens can be flipped above the cursor near the bottom edge.
+  cells show the same region from the original and from the super-resolved
+  output. The cells keep to the middle of the canvas — a fixed place to look
+  while the pointer wanders the image, instead of a pane that runs off to the
+  edge after the cursor — and only slide, as little as they can, when the
+  sampled spot would end up hidden underneath them.
 * **滑块对比** (``MODE_SLIDER``) — one aligned view with a draggable vertical
   divider: the left side shows the original, the right side the output. The
   wheel zooms around the cursor, dragging elsewhere pans, and the pan is clamped
@@ -93,11 +94,23 @@ LENS_CELL_MAX_PX = 184.0
 #: drawn (cramped windows).
 LENS_CELL_DRAW_MIN_PX = 56.0
 
-#: Vertical distance from the cursor to the lens cells.
-LENS_OFFSET_PX = 26.0
+#: Gap kept between the magnified pair and the sampled spot when the pair leans
+#: out of the pointer's way.
+LENS_DODGE_MARGIN_PX = 10.0
+
+#: How far the pair may lean, as a share of a cell's side. Half a cell plus the
+#: marker floor is enough to free a realistically sized spot; anything further
+#: would let the pair drift to the edges again.
+LENS_DODGE_LIMIT_RATIO = 0.65
 
 #: The marker may shrink below this when the sampled region is tiny on screen.
 LENS_MARKER_MIN_PX = 24.0
+
+#: Which way the magnified pair currently gives the pointer room: it stays put
+#: (``HOME``) until the pointer reaches it, then keeps its chosen side.
+_LENS_DODGE_HOME = 0
+_LENS_DODGE_UP = -1
+_LENS_DODGE_DOWN = 1
 
 #: The zoom slider works in percent of the fit-to-view scale; every step is the
 #: same 1x..10x range in both modes (lens magnification / view zoom).
@@ -108,7 +121,7 @@ ZOOM_SLIDER_STEP = 10
 #: Pixels of margin around the fitted image.
 _VIEW_MARGIN = 6
 
-HINT_LENS = "把鼠标移到图上：放大镜跟随光标，同步放大原图与输出"
+HINT_LENS = "把鼠标移到图上：中间两个放大格同步显示取样处的原图与输出（挡住光标时自动让位）"
 HINT_SLIDER = "拖动分割线左右对照 · 拖其它位置平移 · 滚轮以光标为中心缩放 · 双击复位"
 
 
@@ -230,6 +243,7 @@ class ComparisonView(QWidget):
         self._mode = MODE_LENS
         self._zoom = 1.0
         self._lens_zoom = LENS_DEFAULT_ZOOM
+        self._lens_dodge_side = _LENS_DODGE_HOME
         self._pan = QPointF(0.0, 0.0)
         self._split = 0.5
         self._cursor = QPointF(0.0, 0.0)
@@ -252,6 +266,7 @@ class ComparisonView(QWidget):
         self._pair = pair
         self._zoom = 1.0
         self._pan = QPointF(0.0, 0.0)
+        self._lens_dodge_side = _LENS_DODGE_HOME
         # Start on the image centre so the lens has something to show before
         # the first mouse move.
         self._cursor = (
@@ -492,32 +507,71 @@ class ComparisonView(QWidget):
     def lens_panels(self) -> tuple[QRectF, QRectF]:
         """The two magnified cells (original, output) in widget coordinates.
 
-        They sit just past the marker like Upscayl's lens, flip above it when
-        the cursor is near the bottom edge, and stay fully inside the view.
+        They sit in the middle of the canvas and stay there — a stable place to
+        look while the pointer roams — and only slide out of the way when the
+        sampled spot would be hidden underneath them (see :meth:`_lens_dodge`).
         """
         cell = self.lens_cell_size()
         if cell < 1.0:
             return QRectF(), QRectF()
         area = self.view_rect()
-        marker = self.lens_marker_rect()
         total = 2.0 * cell + LENS_GAP_PX
-        left = min(
-            max(self._cursor.x() - total / 2.0, area.left() + _VIEW_MARGIN),
-            area.right() - _VIEW_MARGIN - total,
+        center = area.center()
+        group = QRectF(
+            center.x() - total / 2.0,
+            center.y() - cell / 2.0,
+            total,
+            cell,
         )
-        # Offset from the marker, not the cursor: the marker's height depends on
-        # the zoom, and the cells must never sit on top of it.
-        top = marker.bottom() + LENS_OFFSET_PX
-        if top + cell > area.bottom() - _VIEW_MARGIN:
-            top = marker.top() - LENS_OFFSET_PX - cell
+        group.translate(self._lens_dodge(group))
+        # Never off the canvas (a cramped view can make the dodge impossible).
+        left = min(
+            max(group.left(), area.left() + _VIEW_MARGIN),
+            max(area.left() + _VIEW_MARGIN, area.right() - _VIEW_MARGIN - total),
+        )
         top = min(
-            max(top, area.top() + _VIEW_MARGIN),
-            area.bottom() - _VIEW_MARGIN - cell,
+            max(group.top(), area.top() + _VIEW_MARGIN),
+            max(area.top() + _VIEW_MARGIN, area.bottom() - _VIEW_MARGIN - cell),
         )
         return (
             QRectF(left, top, cell, cell),
             QRectF(left + cell + LENS_GAP_PX, top, cell, cell),
         )
+
+    def _lens_dodge(self, group: QRectF) -> QPointF:
+        """How far the magnified pair leans to give the sampled spot room.
+
+        Vertical only: the pair is much wider than it is tall, so up/down is
+        always the shorter way out, and it keeps the pair centred horizontally.
+        The lean is the smallest that frees the spot, never more than half a cell
+        (:data:`LENS_DODGE_LIMIT_RATIO`) — a pointer buried in the middle of the
+        pair gets it shifted as far as it may go, not chased across the canvas.
+
+        The side (up or down) is picked when the pointer first reaches the pair
+        and then held until it leaves again: re-picking the shorter side for
+        every pixel of movement would throw the pair across the canvas the
+        moment the pointer crossed its middle.
+        """
+        marker = self.lens_marker_rect()
+        if marker.isEmpty() or not group.intersects(marker):
+            self._lens_dodge_side = _LENS_DODGE_HOME
+            return QPointF(0.0, 0.0)
+        area = self.view_rect()
+        limit = group.height() * LENS_DODGE_LIMIT_RATIO
+        if self._lens_dodge_side == _LENS_DODGE_HOME:
+            up = marker.top() - LENS_DODGE_MARGIN_PX - group.bottom()
+            down = marker.bottom() + LENS_DODGE_MARGIN_PX - group.top()
+            # Ties (pointer dead centre) go up: a magnifier held above the spot.
+            self._lens_dodge_side = (
+                _LENS_DODGE_UP if abs(up) <= abs(down) + 0.5 else _LENS_DODGE_DOWN
+            )
+        if self._lens_dodge_side == _LENS_DODGE_UP:
+            chosen = marker.top() - LENS_DODGE_MARGIN_PX - group.bottom()
+            chosen = max(max(chosen, -limit), area.top() + _VIEW_MARGIN - group.top())
+        else:
+            chosen = marker.bottom() + LENS_DODGE_MARGIN_PX - group.top()
+            chosen = min(min(chosen, limit), area.bottom() - _VIEW_MARGIN - group.bottom())
+        return QPointF(0.0, chosen)
 
     def lens_marker_rect(self) -> QRectF:
         """On-screen rectangle of the output pixels the lens magnifies."""

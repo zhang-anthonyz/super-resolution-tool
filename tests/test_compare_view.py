@@ -11,7 +11,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("SRT_SETTINGS_DIR", tempfile.mkdtemp(prefix="srt-compare-tests-"))
 pytest.importorskip("PySide6")
 
-from PySide6.QtCore import QPointF, QSizeF, Qt  # noqa: E402
+from PySide6.QtCore import QPointF, QRectF, QSizeF, Qt  # noqa: E402
 from PySide6.QtGui import QMouseEvent  # noqa: E402
 from PySide6.QtWidgets import QApplication, QPushButton  # noqa: E402
 
@@ -181,7 +181,7 @@ def test_sample_block_magnifies_by_the_lens_zoom(qapp, tmp_path):
     assert view.sample_block(cell).width() == pytest.approx(160.0)
 
 
-def test_lens_tracks_the_mouse_and_keeps_its_panels_on_screen(qapp, tmp_path):
+def test_lens_tracks_the_mouse(qapp, tmp_path):
     input_path, output_path = _write_pair(tmp_path, size=(64, 48), scale=4)
     view = ComparisonView()
     view.resize(800, 500)
@@ -193,31 +193,121 @@ def test_lens_tracks_the_mouse_and_keeps_its_panels_on_screen(qapp, tmp_path):
     assert view.sample_point().x() > 128.0
     assert view.sample_point().y() > 96.0
 
-    original_cell, output_cell = view.lens_panels()
-    area = view.view_rect()
-    for cell_rect in (original_cell, output_cell):
-        assert area.contains(cell_rect), (cell_rect, area)
-        assert cell_rect.width() == pytest.approx(view.lens_cell_size())
-    # Cells show the same region, side by side, and never sit on the marker.
-    assert output_cell.left() > original_cell.left()
-    assert output_cell.top() == pytest.approx(original_cell.top())
-    marker = view.lens_marker_rect()
-    assert not marker.intersects(original_cell)
-    assert not marker.intersects(output_cell)
+
+def _panel_group(view) -> QRectF:
+    return view.lens_panels()[0].united(view.lens_panels()[1])
 
 
-def test_lens_cells_flip_above_the_cursor_near_the_bottom_edge(qapp, tmp_path):
+def test_lens_panels_hold_the_middle_of_the_canvas(qapp, tmp_path):
+    """The pair is a fixed place to look, not a pane that chases the cursor."""
     input_path, output_path = _write_pair(tmp_path, size=(64, 48), scale=4)
     view = ComparisonView()
     view.resize(800, 500)
     view.set_pair(load_preview_pair(input_path, output_path))
+    area = view.view_rect()
 
+    # Pointer in a far corner: the pair ignores it and stays centred.
     rect = view.image_rect()
-    _hover(view, QPointF(rect.center().x(), rect.bottom() - 2))
+    _hover(view, QPointF(rect.left() + 2.0, rect.top() + 2.0))
+    group = _panel_group(view)
+    assert group.center().x() == pytest.approx(area.center().x(), abs=1.0)
+    assert group.center().y() == pytest.approx(area.center().y(), abs=1.0)
 
-    original_cell, _output_cell = view.lens_panels()
-    assert original_cell.bottom() <= view.view_rect().bottom()
-    assert original_cell.top() < view.sample_point().y()
+    original_cell, output_cell = view.lens_panels()
+    for cell_rect in (original_cell, output_cell):
+        assert area.contains(cell_rect), (cell_rect, area)
+        assert cell_rect.width() == pytest.approx(view.lens_cell_size())
+    assert output_cell.left() > original_cell.left()
+    assert output_cell.top() == pytest.approx(original_cell.top())
+
+    # Moving the pointer around (away from the pair) must not move the pair.
+    other = QPointF(rect.right() - 2.0, rect.bottom() - 2.0)
+    _hover(view, other)
+    assert _panel_group(view) == group
+
+
+def test_lens_panels_lean_only_a_little_for_the_pointer(qapp, tmp_path):
+    """The pair gives the pointer room, but never wanders off to an edge."""
+    input_path, output_path = _write_pair(tmp_path, size=(64, 48), scale=4)
+    view = ComparisonView()
+    view.resize(800, 500)
+    view.set_pair(load_preview_pair(input_path, output_path))
+    area = view.view_rect()
+    limit = view.lens_cell_size() * compare_view.LENS_DODGE_LIMIT_RATIO
+
+    for x_share in (0.1, 0.35, 0.5, 0.65, 0.9):
+        for y_share in (0.05, 0.3, 0.42, 0.5, 0.58, 0.7, 0.95):
+            _hover(
+                view,
+                QPointF(
+                    area.left() + area.width() * x_share,
+                    area.top() + area.height() * y_share,
+                ),
+            )
+            group = _panel_group(view)
+            marker = view.lens_marker_rect()
+            offset = group.center().y() - area.center().y()
+            assert area.contains(group), (x_share, y_share, group, area)
+            # Never further than the cap from the middle of the canvas, and
+            # never off the canvas: the pair is a fixture, not a follower.
+            assert abs(offset) <= limit + 1.0, (x_share, y_share, offset, limit)
+            if marker.intersects(group):
+                # Still overlapping: buried too deep to be freed within the cap,
+                # so the pair leans as far as it is allowed to.
+                assert abs(offset) >= limit - 1.0, (x_share, y_share, offset)
+
+
+def test_lens_panels_lean_away_from_the_pointer(qapp, tmp_path):
+    """Pointer just inside either edge of the pair: it moves off the spot, the
+    short way, and the spot is fully visible again."""
+    input_path, output_path = _write_pair(tmp_path, size=(160, 120), scale=16)
+    for above in (True, False):
+        # A fresh view each time: which side the pair leans to is sticky until
+        # the pointer leaves it, exactly so a crossing does not flip it.
+        view = ComparisonView()
+        view.resize(800, 500)
+        view.set_pair(load_preview_pair(input_path, output_path))
+        area = view.view_rect()
+        cell = view.lens_cell_size()
+        home = QRectF(
+            area.center().x() - (2 * cell + compare_view.LENS_GAP_PX) / 2.0,
+            area.center().y() - cell / 2.0,
+            2 * cell + compare_view.LENS_GAP_PX,
+            cell,
+        )
+        _hover(
+            view,
+            QPointF(
+                area.center().x(),
+                home.top() + 8.0 if above else home.bottom() - 8.0,
+            ),
+        )
+
+        group = _panel_group(view)
+        offset = group.center().y() - area.center().y()
+        assert not view.lens_marker_rect().intersects(group), (above, group)
+        assert abs(offset) <= cell * compare_view.LENS_DODGE_LIMIT_RATIO + 1.0
+        # A pointer above the middle pushes the pair down and vice versa.
+        assert (offset > 0) is above, (above, offset)
+
+
+def test_lens_panels_hold_their_side_while_the_pointer_crosses(qapp, tmp_path):
+    """Crossing the pair's middle must not throw it to the other side."""
+    input_path, output_path = _write_pair(tmp_path, size=(64, 48), scale=4)
+    view = ComparisonView()
+    view.resize(800, 500)
+    view.set_pair(load_preview_pair(input_path, output_path))
+    area = view.view_rect()
+
+    offsets = []
+    for step in range(41):
+        y_share = 0.3 + 0.4 * step / 40
+        _hover(view, QPointF(area.center().x(), area.top() + area.height() * y_share))
+        offsets.append(_panel_group(view).center().y() - area.center().y())
+
+    # It moves only in one direction while the pointer walks through it.
+    signs = {1 if offset > 0 else -1 if offset < 0 else 0 for offset in offsets}
+    assert signs <= {1, 0} or signs <= {-1, 0}, offsets
 
 
 def test_lens_overlay_disappears_when_the_mouse_leaves(qapp, tmp_path):

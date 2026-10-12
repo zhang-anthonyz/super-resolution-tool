@@ -403,7 +403,8 @@ def stage_compare_view(window, app, out_dir: Path, tag: str) -> list[str]:
         app.processEvents()
 
     shots = (
-        (compare_view.MODE_LENS, 0.42, 0.34, "compare-lens"),
+        (compare_view.MODE_LENS, 0.42, 0.22, "compare-lens"),
+        (compare_view.MODE_LENS, 0.50, 0.50, "compare-lens-lean"),
         (compare_view.MODE_SLIDER, 0.30, 0.50, "compare-slider"),
     )
     for mode, x_share, y_share, name in shots:
