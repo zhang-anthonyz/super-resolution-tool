@@ -251,7 +251,7 @@ python app\main.py -v           # 展开到每块 tile 的调试日志
 | 模型 | 倍率 | 体积 | 定位 | 授权 |
 |---|---|---|---|---|
 | `realesr-general-x4v3` | 4x | 2.4 MB | **默认**（真实 / 3D·CG）：SRVGG 轻量通用，速度最快 | BSD-3-Clause |
-| `RealESRGAN_x2plus` | 2x | 33.7 MB | 轻度放大，无降噪 | BSD-3-Clause |
+| `RealESRGAN_x2plus` | 2x | 33.7 MB | 轻度放大，**官方 fp16 导出**，无降噪 | BSD-3-Clause |
 | `RealESRGAN_x4plus_anime_6B` | 4x | 9.0 MB | **2D 动漫默认**：边缘自然 | BSD-3-Clause |
 | `RealESRGAN_x4plus_fp16` | 4x | 33.7 MB | RRDB 重模型，高锐度细节 | BSD-3-Clause |
 | `SwinIR_x4_classical` | 4x | 58.2 MB | 干净图保真度最高（Set5 clean4x **30.68 dB**，比默认高 +6.2 dB），较慢 | Apache-2.0 |

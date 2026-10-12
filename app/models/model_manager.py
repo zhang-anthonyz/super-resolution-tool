@@ -57,7 +57,9 @@ _MODEL_PATHS = {
 
 _MODEL_DESCRIPTIONS = {
     "realesr-general-x4v3": ("真实/3D·CG，SRVGG 轻量通用模型，适度降噪（快）"),
-    "RealESRGAN_x2plus": ("真实，RRDB 2x 模型，适合轻度放大（2 倍），无降噪"),
+    "RealESRGAN_x2plus": (
+        "真实，RRDB 官方 2x 模型（fp16 导出），适合轻度放大（2 倍），无降噪"
+    ),
     "RealESRGAN_x4plus_anime_6B": ("2D 动漫，RRDB 模型，边缘自然，无降噪"),
     "RealESRGAN_x4plus_fp16": ("真实，RRDB 重模型，高锐度细节，无降噪"),
     "SwinIR_x4_classical": (
