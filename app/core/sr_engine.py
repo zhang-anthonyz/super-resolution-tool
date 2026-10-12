@@ -5,9 +5,9 @@
 from __future__ import annotations
 
 import logging
-import shutil
 import subprocess
 import tempfile
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,7 +25,7 @@ from .runtime_capabilities import (
     provider_for_backend,
     provider_label,
 )
-from .tiling import postprocess_tensor, preprocess_image, tile_regions
+from .tiling import axis_starts, blend_tile, postprocess_tensor, preprocess_image
 from .types import Backend, ModelMeta, ProgressInfo
 
 logger = logging.getLogger(__name__)
@@ -35,8 +35,16 @@ def _clamp01(value: float) -> float:
     return max(0.0, min(1.0, float(value)))
 
 
-#: Buffers larger than this are memory-mapped to disk instead of RAM.
-_DISK_BUFFER_THRESHOLD_BYTES = 512 * 1024 * 1024
+def _format_eta(seconds: float) -> str:
+    """Compact remaining-time text for the progress line."""
+    if seconds < 10.0:
+        return f"{seconds:.1f}s"
+    return f"{seconds:.0f}s"
+
+
+#: Input-space pixels shared by neighbouring tiles. Bigger bands hide seams
+#: better but re-infer more pixels; 10 is the Real-ESRGAN default.
+_TILE_OVERLAP = 10
 
 
 @dataclass(frozen=True)
@@ -143,6 +151,7 @@ class OnnxEngine(SuperResEngine):
         self._pair_fp16 = False
         self._precision = "fp16" if backend == Backend.CUDA else "fp32"
         self._active_providers: tuple[str, ...] = ()
+        self._logged_geometry: Optional[tuple] = None
 
     @property
     def active_providers(self) -> tuple[str, ...]:
@@ -155,6 +164,13 @@ class OnnxEngine(SuperResEngine):
         if not self._active_providers:
             return self.backend.value
         return ", ".join(provider_label(item) for item in self._active_providers)
+
+    @property
+    def precision_label(self) -> str:
+        """Inference precision of the loaded session (``fp16`` / ``fp32``)."""
+        if self._model is None:
+            return ""
+        return self._precision
 
     def load_model(self, model: ModelMeta) -> None:
         model_path = self._resolve_model_path(model.model_path)
@@ -474,7 +490,13 @@ class OnnxEngine(SuperResEngine):
         denoise_value: float = 0.0,
         dtype=None,
     ) -> np.ndarray:
-        """Tiled inference for any session, with overlap-weighted accumulation.
+        """Tiled inference for any session, writing tiles straight into uint8.
+
+        Tiles are written into the output image as they finish, cross-fading the
+        overlap bands against their already-written left/above neighbours. That
+        keeps peak memory at one output image instead of the former
+        accumulator + weight + divide buffers (three full float32 images, which
+        for a 4x output of a large photo meant gigabytes spilled to disk).
 
         ``dtype`` is the input dtype of the session being run; it defaults to
         the main model's precision and must be overridden when running the
@@ -483,33 +505,69 @@ class OnnxEngine(SuperResEngine):
         if dtype is None:
             dtype = self._inference_dtype()
         _, channels, height, width = tensor.shape
-        regions = tile_regions(height, width, tile_size=tile_size, overlap=10)
-        total = len(regions)
-
+        y_starts = axis_starts(height, tile_size=tile_size, overlap=_TILE_OVERLAP)
+        x_starts = axis_starts(width, tile_size=tile_size, overlap=_TILE_OVERLAP)
+        total = len(y_starts) * len(x_starts)
         out_channels = out_channels or channels
-        output_height = height * target_scale
-        output_width = width * target_scale
-        accumulator, accumulator_tmp = self._allocate_buffer(
-            (1, out_channels, output_height, output_width),
-            dtype=np.float32,
+        output = np.empty(
+            (height * target_scale, width * target_scale, out_channels),
+            dtype=np.uint8,
         )
-        weights, weights_tmp = self._allocate_buffer(
-            (1, 1, output_height, output_width),
-            dtype=np.float32,
-        )
-        temp_handles = [handle for handle in (accumulator_tmp, weights_tmp) if handle]
-        averaged = None
-        try:
-            for index, region in enumerate(regions, start=1):
+
+        index = 0
+        started = time.perf_counter()
+        geometry = (tile_size, _TILE_OVERLAP, height, width, target_scale, dtype)
+        if geometry != self._logged_geometry:
+            # Logged once per distinct shape: a video runs the same geometry for
+            # every frame, and repeating this line per frame would bury the log.
+            self._logged_geometry = geometry
+            logger.info(
+                "tile 推理：%s 块（%s 行 x %s 列，tile %s，重叠 %s）· 输入 %sx%s · "
+                "输出 %sx%s · %s",
+                total,
+                len(y_starts),
+                len(x_starts),
+                tile_size,
+                _TILE_OVERLAP,
+                width,
+                height,
+                width * target_scale,
+                height * target_scale,
+                np.dtype(dtype).name,
+            )
+        for row, top in enumerate(y_starts):
+            bottom = min(top + tile_size, height)
+            out_top = top * target_scale
+            out_bottom = bottom * target_scale
+            # How many output rows/columns this tile shares with the tile to the
+            # left / above it (zero when there is no neighbour to fade against).
+            band_y = (
+                0
+                if row == 0
+                else max(
+                    0,
+                    min(y_starts[row - 1] + tile_size, height) * target_scale
+                    - out_top,
+                )
+            )
+            for column, left in enumerate(x_starts):
                 if self.cancelled:
                     raise SuperResCancelled()
+                tile_started = time.perf_counter()
+                right = min(left + tile_size, width)
+                out_left = left * target_scale
+                out_right = right * target_scale
+                band_x = (
+                    0
+                    if column == 0
+                    else max(
+                        0,
+                        min(x_starts[column - 1] + tile_size, width) * target_scale
+                        - out_left,
+                    )
+                )
 
-                tile = tensor[
-                    :,
-                    :,
-                    region.top : region.bottom,
-                    region.left : region.right,
-                ]
+                tile = tensor[:, :, top:bottom, left:right]
                 feeds = self._feeds_for_tile(
                     input_name,
                     tile,
@@ -517,9 +575,13 @@ class OnnxEngine(SuperResEngine):
                     denoise_value=denoise_value,
                     dtype=dtype,
                 )
-                output = self._run_tile(session, output_name, feeds)
-                output = self._validate_output(
-                    output, region, target_scale, out_channels
+                output_tile = self._run_tile(session, output_name, feeds)
+                output_tile = self._validate_output(
+                    output_tile,
+                    bottom - top,
+                    right - left,
+                    target_scale,
+                    out_channels,
                 )
 
                 if pair is not None:
@@ -540,78 +602,52 @@ class OnnxEngine(SuperResEngine):
                     blended = self._run_tile(pair_session, pair_output, pair_feeds)
                     blended = self._validate_output(
                         blended,
-                        region,
+                        bottom - top,
+                        right - left,
                         target_scale,
                         pair_channels or out_channels,
                     )
-                    output = output * (1.0 - pair_strength) + blended * pair_strength
+                    output_tile = (
+                        output_tile * (1.0 - pair_strength)
+                        + blended * pair_strength
+                    )
 
-                out_top = region.top * target_scale
-                out_left = region.left * target_scale
-                out_bottom = region.bottom * target_scale
-                out_right = region.right * target_scale
-                accumulator[:, :, out_top:out_bottom, out_left:out_right] += output
-                weights[:, :, out_top:out_bottom, out_left:out_right] += 1.0
+                rgb = postprocess_tensor(output_tile)
+                blend_tile(
+                    output[out_top:out_bottom, out_left:out_right],
+                    rgb,
+                    band_x=band_x,
+                    band_y=band_y,
+                )
 
+                index += 1
+                elapsed = time.perf_counter() - started
+                tile_ms = (elapsed / index) * 1000.0
                 if progress_cb is not None:
+                    remaining = max(0, total - index) * elapsed / index
                     progress_cb(
                         ProgressInfo(
                             current=index,
                             total=total,
-                            message=f"tile {index}/{total}",
+                            message=(
+                                f"tile {index}/{total} · {tile_ms:.0f}ms/块 · "
+                                f"剩余 {_format_eta(remaining)}"
+                            ),
                         )
                     )
+                logger.debug(
+                    "tile %s/%s 完成 · %.0fms · 累计 %.2fs",
+                    index,
+                    total,
+                    (time.perf_counter() - tile_started) * 1000.0,
+                    elapsed,
+                )
 
                 if self.cancelled:
                     raise SuperResCancelled()
 
-            averaged, averaged_tmp = self._allocate_buffer(
-                accumulator.shape,
-                dtype=np.float32,
-            )
-            if averaged_tmp is not None:
-                temp_handles.append(averaged_tmp)
-            np.divide(accumulator, weights, out=averaged, where=weights > 0)
-            return postprocess_tensor(averaged)
-        finally:
-            # 大图会把累加缓冲放到磁盘（srt-buffer-*）。先断开引用让 memmap
-            # 立即释放文件锁，再删临时目录，否则 Windows 下删不掉、永久残留。
-            del accumulator, weights, averaged
-            self._release_temp_buffers(temp_handles)
-
-    @staticmethod
-    def _allocate_buffer(
-        shape: tuple[int, ...],
-        dtype,
-    ) -> tuple[np.ndarray, Optional[tempfile.TemporaryDirectory]]:
-        """Allocate large float buffers on disk to avoid host RAM spikes."""
-        item_count = 1
-        for size in shape:
-            item_count *= int(size)
-        byte_count = item_count * np.dtype(dtype).itemsize
-        if byte_count < _DISK_BUFFER_THRESHOLD_BYTES:
-            return np.zeros(shape, dtype=dtype), None
-
-        handle = tempfile.TemporaryDirectory(prefix="srt-buffer-")
-        path = Path(handle.name) / "buffer.dat"
-        buffer = np.memmap(path, dtype=dtype, mode="w+", shape=shape)
-        buffer[:] = 0
-        return buffer, handle
-
-    @staticmethod
-    def _release_temp_buffers(handles) -> None:
-        """Delete the temp dirs that held disk-backed scratch buffers.
-
-        Callers must drop their references to the mapped arrays *before* this
-        runs: on Windows an open memmap keeps a lock on ``buffer.dat``, so
-        deleting the tree first fails and every large image silently leaks its
-        scratch files into %TEMP%.
-        """
-        for handle in handles:
-            try:
-                handle.cleanup()
-            except Exception:  # noqa: BLE001 - fall back to a forced rmtree
-                shutil.rmtree(getattr(handle, "name", ""), ignore_errors=True)
+        logger.debug("tile 推理完成：%.2fs", time.perf_counter() - started)
+        return output
 
     def _feeds_for_tile(
         self,
@@ -645,15 +681,16 @@ class OnnxEngine(SuperResEngine):
             raise ValueError(f"模型输出应为 NCHW，实际 shape={output.shape}")
         return output
 
+    @staticmethod
     def _validate_output(
-        self,
         output: np.ndarray,
-        region,
+        tile_height: int,
+        tile_width: int,
         target_scale: int,
         out_channels: int,
     ) -> np.ndarray:
-        expected_h = region.height * target_scale
-        expected_w = region.width * target_scale
+        expected_h = tile_height * target_scale
+        expected_w = tile_width * target_scale
         if output.shape[2:] != (expected_h, expected_w):
             raise ValueError(
                 "模型输出尺寸与 tile 倍率不一致: "

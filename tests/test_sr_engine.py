@@ -304,58 +304,102 @@ def test_inference_and_pair_dtype_are_tracked_separately():
     assert engine._pair_dtype() is np.float32  # noqa: SLF001
 
 
-def test_tiled_run_releases_disk_buffers_synchronously(monkeypatch):
-    """Cleanup must happen inside the call, not whenever GC gets around to it."""
-    import tempfile
-
-    from app.core import sr_engine
-
-    monkeypatch.setattr(sr_engine, "_DISK_BUFFER_THRESHOLD_BYTES", 1)
-    released = []
-    monkeypatch.setattr(
-        sr_engine.OnnxEngine,
-        "_release_temp_buffers",
-        staticmethod(lambda handles: released.append(len(handles))),
-    )
-
-    engine = make_engine(FakeSession(scale=2), make_model(scale=2))
-    engine.upscale_image(np.zeros((8, 8, 3), dtype=np.uint8), scale=2)
-
-    # 累加器 + 权重 + 均值缓冲都在磁盘上，一次调用内全部释放
-    assert len(released) == 1 and released[0] >= 2, released
-
-
-def test_tiled_run_leaves_no_temp_dirs(monkeypatch):
-    """Disk scratch buffers (huge images) must not leak into %TEMP%."""
+def test_tiled_inference_never_writes_scratch_files():
+    """Tiles are written straight into the output image, so a 4x run of a large
+    photo no longer spills accumulator buffers into %TEMP% (the previous
+    implementation memory-mapped three full float32 images past 512 MB)."""
     import gc
     import tempfile
 
-    from app.core import sr_engine
-
-    monkeypatch.setattr(sr_engine, "_DISK_BUFFER_THRESHOLD_BYTES", 1)
     before = set(Path(tempfile.gettempdir()).glob("srt-buffer-*"))
 
     engine = make_engine(FakeSession(scale=2), make_model(scale=2))
-    engine.upscale_image(np.zeros((8, 8, 3), dtype=np.uint8), scale=2)
+    output = engine.upscale_image(np.zeros((256, 256, 3), dtype=np.uint8), scale=2)
     gc.collect()
 
     after = set(Path(tempfile.gettempdir()).glob("srt-buffer-*"))
     assert after - before == set(), f"leaked: {after - before}"
+    assert output.shape == (512, 512, 3)
 
 
-def test_cancelled_tiled_run_also_removes_disk_buffers(monkeypatch):
-    import tempfile
+class _TileMeanSession:
+    """Returns each tile filled with its own mean input value."""
 
-    from app.core import sr_engine
+    def __init__(self, scale: int = 1) -> None:
+        self.scale = scale
 
-    monkeypatch.setattr(sr_engine, "_DISK_BUFFER_THRESHOLD_BYTES", 1)
-    before = set(Path(tempfile.gettempdir()).glob("srt-buffer-*"))
+    def run(self, output_names, feeds):
+        tile = feeds["input"]
+        value = float(tile.mean())
+        height, width = tile.shape[2] * self.scale, tile.shape[3] * self.scale
+        return [np.full((1, 3, height, width), value, dtype=np.float32)]
 
-    engine = make_engine(FakeSession(scale=2), make_model(scale=2))
-    engine.cancel()
+
+def test_overlapping_tiles_cross_fade_instead_of_stepping():
+    """The seam must ramp across the shared band, not jump between two tiles.
+
+    Tiles at x=0 and x=54 of a horizontal ramp average ~31.5 and ~85.5, so a
+    hard seam would step by ~54 levels in one column while a cross-fade spreads
+    that change over the 10 overlapping columns.
+    """
+    width, height = 128, 32
+    model = make_model(scale=1, tile_size=64)
+    engine = make_engine(_TileMeanSession(), model)
+    gradient = np.tile(np.arange(width, dtype=np.uint8), (height, 1))
+    image = np.repeat(gradient[:, :, None], 3, axis=2)
+
+    output = engine.upscale_image(image, scale=1)
+
+    row = output[height // 2, :, 0].astype(np.int16)
+    steps = np.abs(np.diff(row))
+    assert steps.max() <= 8, f"hard seam: {steps.max()}"
+
+    # Both sides of the seam keep their own tile's value.
+    assert row[0] == 32 and row[-1] == 118
+    # And the change happens across the band (10 output px between tile starts).
+    assert abs(int(row[63]) - int(row[54])) >= 40
+
+
+def test_cancel_between_tiles_stops_the_run():
+    class CancellingSession(FakeSession):
+        def __init__(self):
+            super().__init__(scale=2)
+            self.engine = None
+
+        def run(self, output_names, feeds):
+            result = super().run(output_names, feeds)
+            self.engine.cancel()
+            return result
+
+    session = CancellingSession()
+    engine = make_engine(session, make_model(scale=2, tile_size=32))
+    session.engine = engine
 
     with pytest.raises(SuperResCancelled):
-        engine.upscale_image(np.zeros((8, 8, 3), dtype=np.uint8), scale=2)
+        engine.upscale_image(np.zeros((64, 64, 3), dtype=np.uint8), scale=2)
 
-    after = set(Path(tempfile.gettempdir()).glob("srt-buffer-*"))
-    assert after - before == set(), f"leaked: {after - before}"
+    assert session.calls == 1
+
+
+def test_tile_geometry_is_logged_once_per_distinct_shape(caplog):
+    """A video runs the same geometry per frame; repeating the line would bury
+    the rest of the log."""
+    import logging
+
+    engine = make_engine(FakeSession(scale=2), make_model(scale=2, tile_size=32))
+    image = np.zeros((64, 64, 3), dtype=np.uint8)
+
+    with caplog.at_level(logging.INFO, logger="app.core.sr_engine"):
+        engine.upscale_image(image, scale=2)
+        engine.upscale_image(image, scale=2)
+        engine.upscale_image(np.zeros((96, 64, 3), dtype=np.uint8), scale=2)
+
+    geometry_lines = [
+        record.getMessage()
+        for record in caplog.records
+        if "tile 推理" in record.getMessage()
+    ]
+    assert len(geometry_lines) == 2, geometry_lines
+    # tile 32 with overlap 10 -> stride 22: 3x3 for 64x64, 5x3 for 96x64.
+    assert "9 块（3 行 x 3 列" in geometry_lines[0]
+    assert "15 块（5 行 x 3 列" in geometry_lines[1]

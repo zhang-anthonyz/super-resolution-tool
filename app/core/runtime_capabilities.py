@@ -68,6 +68,29 @@ def _bundled_runtime_exists(backend: Backend) -> bool:
     return (runtime_dir / "onnxruntime").is_dir()
 
 
+def _quiet_onnxruntime_logger(onnxruntime) -> None:
+    """Stop ORT's native logger from spamming the console.
+
+    Session creation prints a two-line warning per model ("Some nodes were not
+    assigned to the preferred execution providers...", which is expected for the
+    CPU shape ops of these graphs). Keep only errors, or plain INFO when the
+    user asked for verbose output.
+    """
+    import logging
+    import os
+
+    verbose = os.environ.get("SRT_LOG_LEVEL", "").strip().lower() == "debug"
+    setter = getattr(onnxruntime, "set_default_logger_severity", None)
+    if callable(setter):
+        try:
+            setter(1 if verbose else 3)
+        except Exception:
+            pass
+    logging.getLogger("onnxruntime").setLevel(
+        logging.INFO if verbose else logging.ERROR
+    )
+
+
 def load_onnxruntime_for_backend(backend: Backend):
     """Load the ONNX Runtime distribution selected for ``backend``.
 
@@ -83,8 +106,11 @@ def load_onnxruntime_for_backend(backend: Backend):
         for name in list(sys.modules):
             if name == "onnxruntime" or name.startswith("onnxruntime."):
                 del sys.modules[name]
-        return importlib.import_module("onnxruntime")
-    return importlib.import_module("onnxruntime")
+        onnxruntime = importlib.import_module("onnxruntime")
+    else:
+        onnxruntime = importlib.import_module("onnxruntime")
+    _quiet_onnxruntime_logger(onnxruntime)
+    return onnxruntime
 
 
 def backend_available(
