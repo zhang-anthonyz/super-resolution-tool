@@ -493,8 +493,13 @@ Vulkan 引擎（ncnn）、图片管线（单张 / 批量 / 尺寸与压缩策略
 - **NVIDIA 真机验证**：CUDA / TensorRT 路径已按 execution provider 实现，但开发机为 AMD，尚缺实测；
 - **CI**：GitHub Actions 跑单元测试（GPU 用例自动 skip）与离屏 UI 审计脚本；
 - **更多模型**：DRUNet / DPIR 一类纯 CNN 盲降噪（SCUNet 的公开 ONNX 在 DirectML 上会进程级崩溃，已排除）、
-  Anime4KCPP 集成（`config.example.yaml` 已预留路径）、
-  Real-CUGAN 2x 的 **Vulkan 后端**（ncnn 侧目前只有 x4plus / anime 系列，2x 仍限 ONNX 后端）；
+  Anime4KCPP 集成（`config.example.yaml` 已预留路径）；
+- **Real-CUGAN 2x 的 Vulkan 后端（已调研，暂缓）**：ncnn 侧有现成端口
+  [nihui/realcugan-ncnn-vulkan](https://github.com/nihui/realcugan-ncnn-vulkan)（MIT，release 含 Windows 二进制
+  与预转换模型，无需自行转 ncnn）。代价是要引入**第二个 ncnn 二进制**（CLI 与模型命名空间都不同，
+  `VulkanEngine` 需按模型切换二进制与参数集）、打包体积再增约 30 MB，且进度/取消/tile 语义要重新对齐；
+  在 ONNX 后端已覆盖 2x 的前提下（DirectML / CUDA / CPU），收益主要体现在"未部署 DirectML 的环境"，
+  故暂缓。要做时按"下载 → 提取 → 引擎扩展 → 保真度实测 → 打包"的路径推进；
 - **配置接线**：让 `config.yaml` 的 `inference` / `video` 段落真正生效（目前只有 `paths` 段落被读取）。
 
 ---
