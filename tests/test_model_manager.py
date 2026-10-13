@@ -18,7 +18,7 @@ from app.ui.ui_logic import resolve_project_path
 def test_builtin_models_cover_real_esrgan_and_swinir():
     models = builtin_models()
 
-    assert len(models) == 7
+    assert len(models) == 12
     by_name = {model.name: model for model in models}
     assert set(by_name) == {
         "realesr-general-x4v3",
@@ -28,13 +28,28 @@ def test_builtin_models_cover_real_esrgan_and_swinir():
         "SwinIR_x4_classical",
         "SwinIR_x4_realSR_GAN",
         "4x-UltraSharp_fp16",
+        "realcugan-2x-no-denoise",
+        "realcugan-2x-denoise1x",
+        "realcugan-2x-denoise2x",
+        "realcugan-2x-denoise3x",
+        "realcugan-2x-conservative",
     }
 
     assert by_name["RealESRGAN_x2plus"].scale == 2
     assert by_name["SwinIR_x4_classical"].scale == 4
     assert by_name["4x-UltraSharp_fp16"].scale == 4
+    # Real-CUGAN 2x 5 档：双 UNet 网络、2x、面向 2D 动漫场景
+    for name in (
+        "realcugan-2x-no-denoise",
+        "realcugan-2x-denoise1x",
+        "realcugan-2x-denoise2x",
+        "realcugan-2x-denoise3x",
+        "realcugan-2x-conservative",
+    ):
+        assert by_name[name].scale == 2
+        assert by_name[name].scene == Scene.ANIME_2D
     for model in models:
-        assert model.scale in {2, 4}
+        assert model.scale in {1, 2, 4}
         assert model.backend == Backend.DIRECTML
         assert model.model_path.suffix == ".onnx"
         assert model.kind == "sr"

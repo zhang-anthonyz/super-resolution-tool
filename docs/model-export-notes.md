@@ -22,6 +22,32 @@ python scripts/export_onnx.py --input <权重>.pth --output models/onnx/<名称>
   `max|diff|` 应 ≤ 1e-4（实测 fp32 全部 ≤ 2e-6，视为 0；fp16 因舍入会略大但仍在 1/255 量级）。
   2x 模型避开奇数尺寸（与 `pixel_unshuffle` 限制一致），4x 模型避开非 4 整数倍尺寸。
 
+### Real-CUGAN 2x 权重（bilibili/ailab，MIT）
+
+权重在 `bilibili/ailab` 的 release 资产里（`Real-CUGAN` tag → `updated_weights.zip`，54 MB，
+解包后 5 份 `up2x-latest-*.pth`，每份 5.1 MB）：
+
+```powershell
+# 一次导出 5 档（no-denoise / denoise1x / denoise2x / denoise3x / conservative）
+python scripts/export_onnx.py `
+    --input models/onnx/_source/realcugan-2x/up2x-latest-no-denoise.pth `
+    --output models/onnx/realcugan-2x-no-denoise.onnx `
+    --arch cugan2x --variant no-denoise --half
+```
+
+- 网络是 **双 UNet**（`unet1` 出残差主干、`unet2` 出细节，逐元素相加），与 RRDB/SRVGG 无关；
+  实现直接复用上游 `Real-CUGAN/upcunet_v3.py`（放在 `scripts/_cugan/`），
+  导出器只包一层"整图路径 + 浮点输出"的 forward。
+- 上游 `UpCunet2x.forward(x, tile_mode, cache_mode, alpha, pro)` 的参数不适合 ONNX：
+  `tile_mode` 会引入分块分支，`pro=False` 的返回还会取整成 `byte`。
+  导出时固定 `tile_mode=0`（整图）、`alpha=1`，并且**不抄 upstream 的取整**，保持 fp 输出。
+- **数值验证**：fp32 在 6 个尺寸（含非整数倍、非方形）上 `max|diff| ≤ 7e-6`；
+  fp16 会因为 SEBlock 内 `mean(x.float()).half()` 产生 ≤1 阶量化差（实测最大 0.96/255），
+  属 fp16 推理固有误差，不是导出错误。
+- 输入尺寸无特殊约束（网络内部自己做 reflect pad 到偶数）；本仓库 512 px 分块推理无需改动。
+- 5 档命名与含义：`no-denoise` / `denoise1x`(σ≈12.5) / `denoise2x`(σ≈25) / `denoise3x`(σ≈50) /
+  `conservative`（降噪最轻，介于无降噪与轻度之间）。
+
 ### SwinIR 权重（官方 release，Apache-2.0）
 
 官方权重在 `JingyunLiang/SwinIR` 的 release `v0.0` 资产里（不在 git 仓库内）。

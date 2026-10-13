@@ -127,3 +127,65 @@ def test_realesrgan_x2plus_loaded_and_shape_correct():
     # And it must not be saturated/garbage: the per-pixel std stays in the
     # natural range for a photo (4 MP equivalent of detail).
     assert 5.0 < output.std() < 80.0
+
+
+_CUGAN_2X_CHECKOUTS = tuple(
+    f"realcugan-2x-{variant}"
+    for variant in ("no-denoise", "denoise1x", "denoise2x", "denoise3x", "conservative")
+)
+
+_cugan_available = all(
+    Path(f"models/onnx/{name}.onnx").is_file() for name in _CUGAN_2X_CHECKOUTS
+)
+
+
+@pytest.mark.skipif(not _cugan_available, reason="Real-CUGAN 2x ONNX files are not shipped")
+def test_realcugan_2x_variants_load_and_differ_by_denoise_strength():
+    """All five Real-CUGAN 2x denoise variants run under DirectML, produce the
+    right shape, and are genuinely different models (a stronger denoise setting
+    must leave a smoother image than a weaker one)."""
+    from app.models.model_manager import builtin_models
+
+    registry = {model.name: model for model in builtin_models()}
+    rng = np.random.default_rng(11)
+    # Anime-ish test patch: flat blocks, a hard colour edge, and grain.
+    height = width = 96
+    yy, xx = np.mgrid[0:height, 0:width]
+    image = np.stack(
+        [
+            (xx * 2 % 256).astype(np.uint8),
+            (yy * 2 % 256).astype(np.uint8),
+            ((xx + yy) % 256).astype(np.uint8),
+        ],
+        axis=-1,
+    )
+    image[30:60, 30:70] = (240, 30, 60)
+    grain = rng.integers(-10, 10, image.shape, dtype=np.int16)
+    image = np.clip(image.astype(np.int16) + grain, 0, 255).astype(np.uint8)
+
+    outputs: dict[str, np.ndarray] = {}
+    for name in _CUGAN_2X_CHECKOUTS:
+        meta = registry[name]
+        assert meta.scale == 2 and meta.scene == Scene.ANIME_2D
+        engine = OnnxEngine(Backend.DIRECTML)
+        engine.load_model(meta)
+        assert "DmlExecutionProvider" in engine._session.get_providers()
+        assert engine.precision_label == "fp16"
+        result = engine.upscale_image(image, scale=2)
+        assert result.shape == (height * 2, width * 2, 3)
+        assert result.dtype == np.uint8
+        outputs[name] = result
+
+    # 每一档都是独立权重：与 no-denoise 档的输出必须有可见差别。
+    baseline = outputs["realcugan-2x-no-denoise"].astype(np.int16)
+    for name in _CUGAN_2X_CHECKOUTS[1:]:
+        diff = np.abs(outputs[name].astype(np.int16) - baseline)
+        assert diff.mean() > 1.0, (name, float(diff.mean()))
+
+    def smoothness(a: np.ndarray) -> float:
+        return float(np.abs(np.diff(a.astype(np.float32), axis=1)).mean())
+
+    # 强降噪档必须比无降噪档更平滑（这是档位命名的含义所在）。
+    assert smoothness(outputs["realcugan-2x-denoise3x"]) < smoothness(
+        outputs["realcugan-2x-no-denoise"]
+    )

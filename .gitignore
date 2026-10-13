@@ -8,6 +8,7 @@ dist/
 # 模型文件（大文件，不入库）
 models/onnx/*.onnx
 models/onnx/*.pth
+models/onnx/_source/
 models/custom_models.json
 
 # 外部二进制（ffmpeg/ncnn/Anime4KCPP）

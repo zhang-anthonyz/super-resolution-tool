@@ -43,7 +43,8 @@
 - **图片**：单张或批量（递归目录），支持 jpg / png / webp，输出保持原格式，可选回缩原尺寸或按百分比缩放；
 - **视频**：逐帧超分 + 显卡硬件编码（NVENC / AMF / QSV），音频原样复制；
 - **对比预览**：单张任务完成后自动进入对照页，放大镜 / 滑块两种方式核对细节；
-- **7 个内置超分模型 + 2 个降噪模型**，支持导入社区 ONNX 权重，也提供 `.pth → ONNX` 导出脚本。
+- **12 个内置超分模型 + 2 个降噪模型**（含 2x 真实照片与 5 档 2x 动漫 Real-CUGAN），
+  支持导入社区 ONNX 权重，也提供 `.pth → ONNX` 导出脚本。
 
 设计上刻意做了几个"不妥协"的选择：
 
@@ -159,7 +160,7 @@
 SuperResolutionTool\SuperResolutionTool.exe
 ```
 
-目录内已含 Python 运行时、PySide6、ONNX Runtime、FFmpeg / FFprobe、ncnn 与 9 个 ONNX 模型，
+目录内已含 Python 运行时、PySide6、ONNX Runtime、FFmpeg / FFprobe、ncnn 与 14 个 ONNX 模型，
 **无需安装 Python 或任何依赖**。请整体保留该目录（模型、DLL、FFmpeg 都在同级），建议拷到固定位置再运行。
 
 无界面自检（加载默认模型 → DirectML → 内置 FFmpeg → 实跑一次 4x 超分）：
@@ -244,19 +245,27 @@ python app\main.py -v           # 展开到每块 tile 的调试日志
 
 ## 内置模型
 
-### 超分模型（7 个）
+### 超分模型（12 个）
 
 体积为 ONNX 单文件大小（十进制 MB）。
 
 | 模型 | 倍率 | 体积 | 定位 | 授权 |
 |---|---|---|---|---|
 | `realesr-general-x4v3` | 4x | 2.4 MB | **默认**（真实 / 3D·CG）：SRVGG 轻量通用，速度最快 | BSD-3-Clause |
-| `RealESRGAN_x2plus` | 2x | 33.7 MB | 轻度放大，**官方 fp16 导出**，无降噪 | BSD-3-Clause |
+| `RealESRGAN_x2plus` | 2x | 33.7 MB | 轻度放大（真实），**官方 fp16 导出**，无降噪 | BSD-3-Clause |
 | `RealESRGAN_x4plus_anime_6B` | 4x | 9.0 MB | **2D 动漫默认**：边缘自然 | BSD-3-Clause |
 | `RealESRGAN_x4plus_fp16` | 4x | 33.7 MB | RRDB 重模型，高锐度细节 | BSD-3-Clause |
 | `SwinIR_x4_classical` | 4x | 58.2 MB | 干净图保真度最高（Set5 clean4x **30.68 dB**，比默认高 +6.2 dB），较慢 | Apache-2.0 |
 | `SwinIR_x4_realSR_GAN` | 4x | 57.5 MB | BSRGAN 真实退化训练，纹理自然，较慢 | Apache-2.0 |
 | `4x-UltraSharp_fp16` | 4x | 33.7 MB | 社区锐利模型，细节最锐 | ⚠️ 授权未声明 |
+| `realcugan-2x-no-denoise` | 2x | 2.6 MB | 2D 动漫 2x：Real-CUGAN 双 UNet，保留细节 | MIT |
+| `realcugan-2x-denoise1x` | 2x | 2.6 MB | 2D 动漫 2x：轻度降噪（σ≈12.5） | MIT |
+| `realcugan-2x-denoise2x` | 2x | 2.6 MB | 2D 动漫 2x：中度降噪（σ≈25） | MIT |
+| `realcugan-2x-denoise3x` | 2x | 2.6 MB | 2D 动漫 2x：强降噪（σ≈50） | MIT |
+| `realcugan-2x-conservative` | 2x | 2.6 MB | 2D 动漫 2x：保守档（降噪最轻） | MIT |
+
+2x 现在有两条线：**真实照片**用 `RealESRGAN_x2plus`（RRDB，33.7 MB），**2D 动漫**用 Real-CUGAN
+五档（双 UNet，每档 2.6 MB，体积与速度都占优，按降噪强度选档）。
 
 ### 降噪模型（2 个，独立于超分模型选择）
 
@@ -357,7 +366,7 @@ super-resolution-tool/
 │   ├── pipelines/              图片管线、视频管线、FFmpeg 调用与探测
 │   └── ui/                     PySide6 界面：主窗口、对比画布、主题、控件、工作线程
 ├── models/
-│   ├── onnx/                   9 个内置 ONNX 模型（*.onnx 未入库）
+│   ├── onnx/                   14 个内置 ONNX 模型（*.onnx 未入库）
 │   └── LICENSES.md             模型来源与授权清单
 ├── vendor/                     ffmpeg / ffprobe / ncnn（未入库）
 ├── scripts/
@@ -409,7 +418,7 @@ python dist\SuperResolutionTool\SuperResolutionTool.exe --headless   # 产物自
 ```
 
 - **one-dir 绿色版**（`contents_directory="."`），产物约 **900 MB**：内置 Python 运行时、PySide6、
-  ONNX Runtime、FFmpeg / FFprobe（含三厂硬件编码器）、ncnn 与 9 个 ONNX 模型；
+  ONNX Runtime、FFmpeg / FFprobe（含三厂硬件编码器）、ncnn 与 14 个 ONNX 模型；
 - spec 细节：排除 `torch / onnx / scipy / pandas / matplotlib` 等开发期依赖；
   采集 `onnxruntime` 与 `shiboken6` 动态库；过滤 `icu*.dll`（某些本地 ICU 构建只导出带版本的 C++ 符号，
   会导致 `QtWidgets` 报 WinError 127）；
@@ -477,14 +486,15 @@ tile 4/9 · 17ms/块 · 剩余 0.08s              # 逐块进度（默认每若�
 
 核心功能已全部落地：环境检测与后端选择、ONNX 推理引擎（DirectML / CUDA / OpenVINO / CPU）、
 Vulkan 引擎（ncnn）、图片管线（单张 / 批量 / 尺寸与压缩策略）、视频管线（逐帧 + 硬件编码 + 音频 remux）、
-界面与打包（四页导航 / 对比预览 / 绿色免安装产物）、视觉与模型打磨（7 超分 + 2 降噪）。
+界面与打包（四页导航 / 对比预览 / 绿色免安装产物）、视觉与模型打磨（12 超分 + 2 降噪）。
 
 待办：
 
 - **NVIDIA 真机验证**：CUDA / TensorRT 路径已按 execution provider 实现，但开发机为 AMD，尚缺实测；
 - **CI**：GitHub Actions 跑单元测试（GPU 用例自动 skip）与离屏 UI 审计脚本；
 - **更多模型**：DRUNet / DPIR 一类纯 CNN 盲降噪（SCUNet 的公开 ONNX 在 DirectML 上会进程级崩溃，已排除）、
-  Anime4KCPP 集成（`config.example.yaml` 已预留路径）；
+  Anime4KCPP 集成（`config.example.yaml` 已预留路径）、
+  Real-CUGAN 2x 的 **Vulkan 后端**（ncnn 侧目前只有 x4plus / anime 系列，2x 仍限 ONNX 后端）；
 - **配置接线**：让 `config.yaml` 的 `inference` / `video` 段落真正生效（目前只有 `paths` 段落被读取）。
 
 ---

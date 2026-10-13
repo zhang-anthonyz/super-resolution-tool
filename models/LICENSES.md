@@ -14,6 +14,24 @@
 | `SwinIR_x4_realSR_GAN.onnx` | 超分 4x | 同上 release `003_realSR_BSRGAN_DFO_s64w8_SwinIR-M_x4_GAN.pth` | Apache-2.0 | BSRGAN 退化训练；真实世界退化更自然 |
 | `SwinIR_colorDN25.onnx` | 降噪 1x | 同上 release `005_colorDN_DFWB_s128w8_SwinIR-M_noise25.pth` | Apache-2.0 | 输入尺度预降噪（σ=25） |
 | `4x-UltraSharp_fp16.onnx` | 超分 4x | 社区权重 `4x-UltraSharp.pth`（Kim2091，原作者仓库已下线，权重以镜像形式流传） | **未声明 / 无明确授权** | ⚠️ 锐度最强，但**不可用于商业分发**；随应用内置由用户明确接受风险后加入 |
+| `realcugan-2x-no-denoise.onnx` | 超分 2x | [bilibili/ailab](https://github.com/bilibili/ailab) `Real-CUGAN` release `updated_weights.zip` → `up2x-latest-no-denoise.pth` | MIT | 双 UNet，2D 动漫 2x，无降噪 |
+| `realcugan-2x-denoise1x.onnx` | 超分 2x | 同上 → `up2x-latest-denoise1x.pth` | MIT | 双 UNet，2D 动漫 2x，轻度降噪（σ≈12.5） |
+| `realcugan-2x-denoise2x.onnx` | 超分 2x | 同上 → `up2x-latest-denoise2x.pth` | MIT | 双 UNet，2D 动漫 2x，中度降噪（σ≈25） |
+| `realcugan-2x-denoise3x.onnx` | 超分 2x | 同上 → `up2x-latest-denoise3x.pth` | MIT | 双 UNet，2D 动漫 2x，强降噪（σ≈50） |
+| `realcugan-2x-conservative.onnx` | 超分 2x | 同上 → `up2x-latest-conservative.pth` | MIT | 双 UNet，2D 动漫 2x，保守档（降噪最轻） |
+
+Real-CUGAN 部分说明：
+
+- 上游是 **UNet**（`unet1` + `unet2`），不是 RRDB/SRVGG，因此本仓库 `scripts/export_onnx.py`
+  新增了 `--arch cugan2x` 入口；网络定义直接复用上游 `Real-CUGAN/upcunet_v3.py`
+  （存放在 `scripts/_cugan/upcunet_v3.py`，保持原样以便逐行对照）。
+- 上游 `UpCunet2x.forward` 带 `tile_mode / cache_mode / alpha / pro` 等 CLI 专用参数，
+  且整图分支 `pro=False` 会把输出取整成 `byte`——不可 ONNX 化。导出器改为直接取
+  `unet1` / `unet2` 拼一条只做整图推理、输出保持浮点的 forward。
+- **数值一致性**：fp32 导出在 6 个尺寸（64×64 / 200×100 / 96×192 / 200×200 / 64×128 / 100×70）
+  上 torch vs ONNX `max|diff| ≤ 7e-6`；fp16 因 SEBlock 里 `mean(...).half()` 的量化
+  会带来 ≤1 阶的差异（实测 ≤0.96/255），属 fp16 推理本身的误差，肉眼不可见。
+- 上游 `LICENSE` 为 **MIT**（Copyright (c) 2022 bilibili），可随应用内置分发。
 
 ## 重新导出方法
 

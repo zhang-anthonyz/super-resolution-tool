@@ -79,6 +79,11 @@ def test_model_options_expose_fp16_registry_with_denoise_hints():
         "SwinIR_x4_classical",
         "SwinIR_x4_realSR_GAN",
         "4x-UltraSharp_fp16",
+        "realcugan-2x-no-denoise",
+        "realcugan-2x-denoise1x",
+        "realcugan-2x-denoise2x",
+        "realcugan-2x-denoise3x",
+        "realcugan-2x-conservative",
     ]
     assert any("降噪" in display for _, display in options)
 
