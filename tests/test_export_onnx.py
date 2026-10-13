@@ -73,3 +73,49 @@ def test_remap_state_dict_is_a_noop_for_already_native_keys():
     native = {"conv_first.weight": 1, "body.0.rdb1.conv1.weight": 2}
 
     assert remap_state_dict(native, 23) == native
+
+
+# ---- Real-CUGAN 2x ----------------------------------------------------------
+
+_CUGAN_SOURCE = (
+    ROOT / "models" / "onnx" / "_source" / "realcugan-2x" / "up2x-latest-no-denoise.pth"
+)
+
+
+def test_cugan2x_wrapper_matches_the_shipped_weight_keys():
+    """The ONNX wrapper must consume the upstream checkpoint with strict=True.
+
+    Guards the two things that actually differ from Real-ESRGAN: the submodule
+    path ``unet1`` / ``unet2`` (not ``unet.unet1``) and the ``seblock`` naming
+    inside ``UNetConv`` (not ``se``).
+    """
+    torch = pytest.importorskip("torch")
+    if not _CUGAN_SOURCE.is_file():
+        pytest.skip("Real-CUGAN source weights are not present in this checkout")
+
+    from export_onnx import _CUGAN2xONNX
+
+    state = torch.load(_CUGAN_SOURCE, map_location="cpu", weights_only=True)
+    model = _CUGAN2xONNX()
+    missing, unexpected = model.load_state_dict(state, strict=False)
+    assert not missing, missing
+    assert not unexpected, unexpected
+
+
+def test_cugan2x_wrapper_doubles_spatial_size():
+    torch = pytest.importorskip("torch")
+    if not _CUGAN_SOURCE.is_file():
+        pytest.skip("Real-CUGAN source weights are not present in this checkout")
+
+    from export_onnx import _CUGAN2xONNX
+
+    model = _CUGAN2xONNX()
+    model.load_state_dict(
+        torch.load(_CUGAN_SOURCE, map_location="cpu", weights_only=True), strict=True
+    )
+    model.eval()
+    with torch.no_grad():
+        out = model(torch.zeros(1, 3, 64, 96))
+    assert out.shape == (1, 3, 128, 192)
+    # fp 输出（不是 upstream CLI 那条取整成 byte 的分支），引擎的后处理契约靠它
+    assert out.dtype == torch.float32

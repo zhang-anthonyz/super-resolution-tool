@@ -1,10 +1,24 @@
-"""将 Real-ESRGAN 官方 .pth 权重导出为 ONNX 模型。
+"""将 Real-ESRGAN / Real-CUGAN 官方 .pth 权重导出为 ONNX 模型。
 
 用法：
-    python scripts/export_onnx.py --input models/onnx/RealESRGAN_x4plus.pth \
-        --output models/onnx/RealESRGAN_x4plus.onnx --scale 4
 
-Real-ESRGAN 输入/输出均为 RGB、[0,1] 归一化，与 OnnxEngine 预处理契约一致。
+  # Real-ESRGAN 2x/4x RRDB（X2plus、x4plus、x4plus_anime_6B、4x-UltraSharp 等）
+  python scripts/export_onnx.py --input models/onnx/RealESRGAN_x2plus.pth \\
+      --output models/onnx/RealESRGAN_x2plus.onnx --scale 2 --half
+
+  # SRVGG 轻量通用（realesr-general / animevideov3 系列）
+  python scripts/export_onnx.py --input realesr-general-x4v3.pth \\
+      --output models/onnx/realesr-general-x4v3.onnx --arch srvgg --scale 4
+
+  # Real-CUGAN 2x（5 档）
+  python scripts/export_onnx.py \\
+      --input models/onnx/_source/realcugan-2x/up2x-latest-no-denoise.pth \\
+      --output models/onnx/realcugan-2x-no-denoise.onnx \\
+      --arch cugan2x --variant no-denoise --half
+
+Real-ESRGAN 输入/输出均为 RGB、[0,1] 归一化；
+Real-CUGAN 2x 的输入是 RGB、[0,1] 归一化，输出同样是 RGB、[0,1] 浮点（与 OnnxEngine
+的 preprocess_image / postprocess_tensor 契约一致）。
 """
 from __future__ import annotations
 
@@ -187,6 +201,38 @@ class SRVGGNetCompact(nn.Module):
         return out
 
 
+class _CUGAN2xONNX(nn.Module):
+    """Real-CUGAN 2x 整图路径的轻量包装，导出 ONNX 时使用。
+
+    upstream 的 ``UpCunet2x.forward`` 留有分块 / cache / pro 等只对推理 CLI
+    有意义的控制参数（且 ``pro=False`` 那一支还把 fp 输出截成 ``byte``，不可
+    ONNX 化）。这里从内部取出 ``unet1`` / ``unet2`` 复用，按整图路径的尺寸
+    对齐方式拼一个 **fp 浮点输出** 的 forward。
+    """
+
+    def __init__(self):
+        super().__init__()
+        # 延迟 import：upstream 文件位于 scripts/_cugan/upcunet_v3.py
+        # 与权重键名严格一致（unet1.* / unet2.*），不另起包装
+        from _cugan.upcunet_v3 import UNet1, UNet2  # type: ignore
+
+        self.unet1 = UNet1(in_channels=3, out_channels=3, deconv=True)
+        self.unet2 = UNet2(in_channels=3, out_channels=3, deconv=False)
+
+    def forward(self, x):
+        n, c, h0, w0 = x.shape
+        ph = ((h0 - 1) // 2 + 1) * 2
+        pw = ((w0 - 1) // 2 + 1) * 2
+        x = F.pad(x, (18, 18 + pw - w0, 18, 18 + ph - h0), mode="reflect")
+        x = self.unet1(x)
+        x0 = self.unet2(x, alpha=1.0)
+        x = F.pad(x, (-20, -20, -20, -20))
+        out = x0 + x
+        if w0 != pw or h0 != ph:
+            out = out[:, :, : h0 * 2, : w0 * 2]
+        return out
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", required=True)
@@ -194,26 +240,41 @@ def main() -> None:
     parser.add_argument("--scale", type=int, default=4)
     parser.add_argument("--num_block", type=int, default=23)
     parser.add_argument("--half", action="store_true", help="导出 fp16 模型")
-    parser.add_argument("--arch", choices=["rrdbnet", "srvgg"], default="rrdbnet")
+    parser.add_argument("--arch", choices=["rrdbnet", "srvgg", "cugan2x"], default="rrdbnet")
+    parser.add_argument(
+        "--variant",
+        default="",
+        help="Real-CUGAN 2x 内部用于区分权重文件的标签，只在 arch=cugan2x 时记录到 print",
+    )
     args = parser.parse_args()
 
     ckpt = torch.load(args.input, map_location="cpu", weights_only=False)
-    state = ckpt.get("params_ema") or ckpt.get("params") or ckpt
+    state = (
+        ckpt.get("params_ema")
+        or ckpt.get("params")
+        or ckpt.get("state_dict")
+        or ckpt
+    )
 
-    num_block = args.num_block
-    if args.arch == "rrdbnet" and is_basicsr_state(state):
-        detected = detect_rrdb_blocks(state)
-        if detected:
-            num_block = detected
-        state = remap_state_dict(state, num_block)
-        print(f"检测到 BasicSR/ESRGAN 旧命名权重，已重映射（RRDB blocks={num_block}）")
-
-    if args.arch == "srvgg":
+    if args.arch == "cugan2x":
+        # 5 档权重文件结构完全一致（unet1.* / unet2.*），不重映射。
+        model = _CUGAN2xONNX()
+        print(
+            f"Real-CUGAN 2x 通用版（upstream UpCunet2x，unet1+unet2），导出为 ONNX（{args.variant or '未指定 variant'}）"
+        )
+    elif args.arch == "srvgg":
         model = SRVGGNetCompact(
             num_in_ch=3, num_out_ch=3, num_feat=64, num_conv=32,
             upscale=args.scale, act_type="prelu",
         )
     else:
+        num_block = args.num_block
+        if is_basicsr_state(state):
+            detected = detect_rrdb_blocks(state)
+            if detected:
+                num_block = detected
+            state = remap_state_dict(state, num_block)
+            print(f"检测到 BasicSR/ESRGAN 旧命名权重，已重映射（RRDB blocks={num_block}）")
         model = RRDBNet(
             num_in_ch=3, num_out_ch=3, scale=args.scale,
             num_feat=64, num_block=num_block, num_grow_ch=32,
@@ -221,6 +282,8 @@ def main() -> None:
     model.load_state_dict(state, strict=True)
     model.eval()
 
+    # 假输入：Real-CUGAN 2x 用 64x64（unet 下采样两次到 16x16）；RRDB x2 不允许奇数
+    # 用 64；其余用 64。
     dummy = torch.randn(1, 3, 64, 64)
     if args.half:
         model = model.half()

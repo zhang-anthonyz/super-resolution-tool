@@ -79,7 +79,7 @@ def test_model_selector_defaults_to_general_with_denoise_slider(qapp):
     window = MainWindow(make_gpu())
     try:
         selector = window.video_model_selector
-        assert selector.model_combo.count() == 8  # 7 个内置超分模型 + 自定义
+        assert selector.model_combo.count() == 13  # 12 内置超分 + 自定义
         assert selector.selected_model_name() == "realesr-general-x4v3"
         assert selector.denoise_slider.value() == 0
         # 降噪模型默认不挂载：只有显式选择后才随模型一起下发

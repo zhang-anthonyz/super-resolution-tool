@@ -20,6 +20,11 @@ _SR_MODEL_NAMES = (
     "SwinIR_x4_classical",
     "SwinIR_x4_realSR_GAN",
     "4x-UltraSharp_fp16",
+    "realcugan-2x-no-denoise",
+    "realcugan-2x-denoise1x",
+    "realcugan-2x-denoise2x",
+    "realcugan-2x-denoise3x",
+    "realcugan-2x-conservative",
 )
 
 #: 纯降噪模型：可作为降噪模型挂到任意超分模型上（1x 走输入尺度预降噪，
@@ -39,6 +44,11 @@ _MODEL_SCALES = {
     "4x-UltraSharp_fp16": 4,
     "realesr-general-wdn-x4v3": 4,
     "SwinIR_colorDN25": 1,
+    "realcugan-2x-no-denoise": 2,
+    "realcugan-2x-denoise1x": 2,
+    "realcugan-2x-denoise2x": 2,
+    "realcugan-2x-denoise3x": 2,
+    "realcugan-2x-conservative": 2,
 }
 
 _MODEL_PATHS = {
@@ -53,6 +63,11 @@ _MODEL_PATHS = {
     "SwinIR_x4_realSR_GAN": Path("models/onnx/SwinIR_x4_realSR_GAN.onnx"),
     "4x-UltraSharp_fp16": Path("models/onnx/4x-UltraSharp_fp16.onnx"),
     "SwinIR_colorDN25": Path("models/onnx/SwinIR_colorDN25.onnx"),
+    "realcugan-2x-no-denoise": Path("models/onnx/realcugan-2x-no-denoise.onnx"),
+    "realcugan-2x-denoise1x": Path("models/onnx/realcugan-2x-denoise1x.onnx"),
+    "realcugan-2x-denoise2x": Path("models/onnx/realcugan-2x-denoise2x.onnx"),
+    "realcugan-2x-denoise3x": Path("models/onnx/realcugan-2x-denoise3x.onnx"),
+    "realcugan-2x-conservative": Path("models/onnx/realcugan-2x-conservative.onnx"),
 }
 
 _MODEL_DESCRIPTIONS = {
@@ -77,6 +92,21 @@ _MODEL_DESCRIPTIONS = {
     "SwinIR_colorDN25": (
         "降噪模型（1x 预降噪），SwinIR 彩色降噪 σ=25，在输入尺度先降噪"
     ),
+    "realcugan-2x-no-denoise": (
+        "2D 动漫，Real-CUGAN 双 UNet 2x（无降噪，fp16），保留更多细节"
+    ),
+    "realcugan-2x-denoise1x": (
+        "2D 动漫，Real-CUGAN 双 UNet 2x（轻度降噪 σ≈12.5，fp16）"
+    ),
+    "realcugan-2x-denoise2x": (
+        "2D 动漫，Real-CUGAN 双 UNet 2x（中度降噪 σ≈25，fp16）"
+    ),
+    "realcugan-2x-denoise3x": (
+        "2D 动漫，Real-CUGAN 双 UNet 2x（强降噪 σ≈50，fp16）"
+    ),
+    "realcugan-2x-conservative": (
+        "2D 动漫，Real-CUGAN 双 UNet 2x 保守档（降噪最轻，介于无降噪与轻度降噪之间，fp16）"
+    ),
 }
 
 _SCENE_BY_NAME = {
@@ -89,6 +119,11 @@ _SCENE_BY_NAME = {
     "4x-UltraSharp_fp16": Scene.REALISTIC,
     "realesr-general-wdn-x4v3": Scene.REALISTIC,
     "SwinIR_colorDN25": Scene.REALISTIC,
+    "realcugan-2x-no-denoise": Scene.ANIME_2D,
+    "realcugan-2x-denoise1x": Scene.ANIME_2D,
+    "realcugan-2x-denoise2x": Scene.ANIME_2D,
+    "realcugan-2x-denoise3x": Scene.ANIME_2D,
+    "realcugan-2x-conservative": Scene.ANIME_2D,
 }
 
 _MODEL_KINDS = {

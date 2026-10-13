@@ -36,7 +36,7 @@
 SuperResolutionTool\SuperResolutionTool.exe
 ```
 
-- 该目录已内置 Python 运行时、PySide6、ONNX Runtime、FFmpeg、ncnn 与 9 个 ONNX 模型，
+- 该目录已内置 Python 运行时、PySide6、ONNX Runtime、FFmpeg、ncnn 与 14 个 ONNX 模型，
   **不需要安装 Python 或任何依赖**。
 - ⚠️ 目录必须整体保留，不要单独把 exe 拷出来 —— 模型、DLL、FFmpeg 都在同级目录里。
 - 建议把整个 `SuperResolutionTool` 文件夹拷到固定位置（如 `D:\Tools\`）再运行。
@@ -138,17 +138,26 @@ python app\main.py --headless # 无界面自检
 
 ## 7. 模型与降噪速查
 
-内置 7 个超分模型（`models/onnx/`）：
+内置 12 个超分模型（`models/onnx/`）：
 
 | 模型 | 倍率 | 定位 |
 |---|---|---|
 | realesr-general-x4v3 | 4x | 轻量通用，默认最快（真实 / 3D·CG 默认） |
-| RealESRGAN_x2plus | 2x | 轻度放大，无降噪 |
+| RealESRGAN_x2plus | 2x | 真实照片轻度放大（RRDB，官方 fp16 导出），无降噪 |
 | RealESRGAN_x4plus_anime_6B | 4x | 2D 动漫（2D 动漫场景默认） |
 | RealESRGAN_x4plus_fp16 | 4x | RRDB 重模型，高锐度 |
 | SwinIR_x4_classical | 4x | 干净图保真度最高，较慢 |
 | SwinIR_x4_realSR_GAN | 4x | 真实退化，纹理自然，较慢 |
 | 4x-UltraSharp_fp16 | 4x | 社区锐利模型，细节最锐 |
+| realcugan-2x-no-denoise | 2x | 2D 动漫 2x：Real-CUGAN 双 UNet，保留细节 |
+| realcugan-2x-denoise1x | 2x | 2D 动漫 2x：轻度降噪（σ≈12.5） |
+| realcugan-2x-denoise2x | 2x | 2D 动漫 2x：中度降噪（σ≈25） |
+| realcugan-2x-denoise3x | 2x | 2D 动漫 2x：强降噪（σ≈50） |
+| realcugan-2x-conservative | 2x | 2D 动漫 2x：保守档（降噪最轻） |
+
+> 2x 分两条线：**真实照片**选 `RealESRGAN_x2plus`；**2D 动漫 / 截图**选 Real-CUGAN 五档
+> （按画面的噪声程度挑降噪档，噪点多选 denoise2x/3x）。这 5 档都是 2.6 MB 的双 UNet，比 RRDB 轻。
+> 注意：**2x 模型目前只能在 ONNX 后端（DirectML / CUDA / CPU）使用**，Vulkan(ncnn) 侧没有 2x 通用权重。
 
 降噪模型（**降噪模型** 下拉框，独立于超分模型）：
 
