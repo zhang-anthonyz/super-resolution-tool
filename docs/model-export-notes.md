@@ -9,12 +9,18 @@ python scripts/export_onnx.py --input <权重>.pth --output models/onnx/<名称>
 ```
 
 - 支持 `--arch rrdbnet`（默认，RRDB 23 块）与 `--arch srvgg`（SRVGG 轻量）。
+- `--scale` 必须与权重的训练倍率一致（`RealESRGAN_x2plus.pth` → `--scale 2`、`x4plus` → `--scale 4`）。
+  **注意**：2x RRDB 内部会做一次 `pixel_unshuffle(2)`，因此推理时输入 H/W 都必须为偶数；
+  本仓库的 512 px 分块推理保证这一点，奇数尺寸会越界。
 - **自动识别 BasicSR/ESRGAN 旧命名**：社区权重（4x-UltraSharp、Remacri、NMKD…）的键名是
   `model.0` / `model.1.sub.N.RDBx.convY.0` / `model.3,6,8,10`，其中：
   - `model.1.sub.0 .. sub.N-1` 是 RRDB 块，`sub.N` 是主干卷积（trunk conv，映射为 `conv_body`）；
   - RRDB 内部卷积外层还有一层 Sequential，需把 `convX.0.weight` 还原成 `convX.weight`。
   脚本会据 `RDBx` 键自动推断块数并重映射，无需手改权重。
 - 验证方式：导出时用 `strict=True` 加载，**0 缺失 / 0 多余**才算架构匹配。
+- 数值一致性：导出后**至少 4 个被 2（4）整除的尺寸**比较 ONNX（CPU EP）与 torch 实现的输出，
+  `max|diff|` 应 ≤ 1e-4（实测 fp32 全部 ≤ 2e-6，视为 0；fp16 因舍入会略大但仍在 1/255 量级）。
+  2x 模型避开奇数尺寸（与 `pixel_unshuffle` 限制一致），4x 模型避开非 4 整数倍尺寸。
 
 ### SwinIR 权重（官方 release，Apache-2.0）
 

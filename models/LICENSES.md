@@ -7,7 +7,7 @@
 |---|---|---|---|---|
 | `realesr-general-x4v3.onnx` | 超分 4x | [xinntao/Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN) `realesr-general-x4v3.pth` | BSD-3-Clause | SRVGG 轻量通用模型，默认真实场景模型 |
 | `realesr-general-wdn-x4v3.onnx` | 降噪 x4 | 同上，`realesr-general-wdn-x4v3.pth` | BSD-3-Clause | 与主模型输出按强度插值（同倍率） |
-| `RealESRGAN_x2plus.onnx` | 超分 2x | 同上，`RealESRGAN_x2plus.pth` | BSD-3-Clause | 轻度放大 |
+| `RealESRGAN_x2plus.onnx` | 超分 2x | 同上，`RealESRGAN_x2plus.pth`（23 块 RRDB，fp16 导出） | BSD-3-Clause | 轻度放大；**模型内部 `pixel_unshuffle(2)` 要求输入 H/W 均为偶数**，由分块推理保证 |
 | `RealESRGAN_x4plus_anime_6B.onnx` | 超分 4x | 同上，`RealESRGAN_x4plus_anime_6B.pth` | BSD-3-Clause | 二次元场景默认模型 |
 | `RealESRGAN_x4plus_fp16.onnx` | 超分 4x | 同上，`RealESRGAN_x4plus.pth`（fp16） | BSD-3-Clause | RRDB 重模型，高锐度 |
 | `SwinIR_x4_classical.onnx` | 超分 4x | [JingyunLiang/SwinIR](https://github.com/JingyunLiang/SwinIR) release `001_classicalSR_DIV2K_s48w8_SwinIR-M_x4.pth` | Apache-2.0 | 双三次退化训练；干净图保真度最高（PSNR 向） |
