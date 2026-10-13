@@ -24,10 +24,20 @@ from __future__ import annotations
 
 import argparse
 import re
+import sys
+from pathlib import Path
 
 import torch
 from torch import nn
 from torch.nn import functional as F
+
+# 上游 Real-CUGAN 网络定义（vendored 到 scripts/_cugan/，保持与上游逐字一致）。
+# 需要 scripts/ 在 sys.path 上，直接执行本文件时它天然是 sys.path[0]。
+_SCRIPTS_DIR = Path(__file__).resolve().parent
+if str(_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_DIR))
+from _cugan.upcunet_v3 import UNet1 as _CUGAN_UNet1  # noqa: E402
+from _cugan.upcunet_v3 import UNet2 as _CUGAN_UNet2  # noqa: E402
 
 #: BasicSR 时代的 RRDB 权重把模块挂在 ``model.N`` 下，且 RRDB 内部卷积外层还有
 #: 一层 Sequential（``conv1.0.weight``）。社区模型（4x-UltraSharp / Remacri /
@@ -201,23 +211,70 @@ class SRVGGNetCompact(nn.Module):
         return out
 
 
+class _DMLSafeUNet1(_CUGAN_UNet1):
+    """``UNet1`` 的 DirectML 安全版：负 padding 裁剪改成等价切片。
+
+    ``F.pad(x, (-4, -4, -4, -4))`` 会lower 成 Slice，而 DirectML execution
+    provider 把它的 ends 算错——探针实测 max|diff| 3.85（CPU EP 为 0），而且
+    **静默出错**：ONNX 输出是一张看起来正常、实则错误的图（Set5 上 PSNR 掉到
+    约 7 dB，正常约 25 dB）。切片完全等价且在所有 EP 上正确，所以在这里重建
+    forward，而不改动 vendored 的上游文件。
+    """
+
+    def forward(self, x):
+        x1 = self.conv1(x)
+        x2 = self.conv1_down(x1)
+        x1 = x1[:, :, 4:-4, 4:-4]  # upstream: F.pad(x1, (-4, -4, -4, -4))
+        x2 = F.leaky_relu(x2, 0.1, inplace=True)
+        x2 = self.conv2(x2)
+        x2 = self.conv2_up(x2)
+        x2 = F.leaky_relu(x2, 0.1, inplace=True)
+        x3 = self.conv3(x1 + x2)
+        x3 = F.leaky_relu(x3, 0.1, inplace=True)
+        return self.conv_bottom(x3)
+
+
+class _DMLSafeUNet2(_CUGAN_UNet2):
+    """``UNet2`` 的 DirectML 安全版（两处负 padding → 切片）。见上。"""
+
+    def forward(self, x, alpha=1):
+        x1 = self.conv1(x)
+        x2 = self.conv1_down(x1)
+        x1 = x1[:, :, 16:-16, 16:-16]  # upstream: F.pad(x1, (-16, -16, -16, -16))
+        x2 = F.leaky_relu(x2, 0.1, inplace=True)
+        x2 = self.conv2(x2)
+        x3 = self.conv2_down(x2)
+        x2 = x2[:, :, 4:-4, 4:-4]  # upstream: F.pad(x2, (-4, -4, -4, -4))
+        x3 = F.leaky_relu(x3, 0.1, inplace=True)
+        x3 = self.conv3(x3)
+        x3 = self.conv3_up(x3)
+        x3 = F.leaky_relu(x3, 0.1, inplace=True)
+        x4 = self.conv4(x2 + x3)
+        x4 = x4 * alpha
+        x4 = self.conv4_up(x4)
+        x4 = F.leaky_relu(x4, 0.1, inplace=True)
+        x5 = self.conv5(x1 + x4)
+        x5 = F.leaky_relu(x5, 0.1, inplace=True)
+        return self.conv_bottom(x5)
+
+
 class _CUGAN2xONNX(nn.Module):
     """Real-CUGAN 2x 整图路径的轻量包装，导出 ONNX 时使用。
 
-    upstream 的 ``UpCunet2x.forward`` 留有分块 / cache / pro 等只对推理 CLI
+    上游的 ``UpCunet2x.forward`` 留有分块 / cache / pro 等只对推理 CLI
     有意义的控制参数（且 ``pro=False`` 那一支还把 fp 输出截成 ``byte``，不可
     ONNX 化）。这里从内部取出 ``unet1`` / ``unet2`` 复用，按整图路径的尺寸
     对齐方式拼一个 **fp 浮点输出** 的 forward。
+
+    两个 UNet 换成 :class:`_DMLSafeUNet1` / :class:`_DMLSafeUNet2`：数值与上游
+    逐元素一致，只是把 DirectML 会算错的负 padding 换成等价切片。权重键名仍是
+    ``unet1.*`` / ``unet2.*``，可直接 strict 加载上游 checkpoint。
     """
 
     def __init__(self):
         super().__init__()
-        # 延迟 import：upstream 文件位于 scripts/_cugan/upcunet_v3.py
-        # 与权重键名严格一致（unet1.* / unet2.*），不另起包装
-        from _cugan.upcunet_v3 import UNet1, UNet2  # type: ignore
-
-        self.unet1 = UNet1(in_channels=3, out_channels=3, deconv=True)
-        self.unet2 = UNet2(in_channels=3, out_channels=3, deconv=False)
+        self.unet1 = _DMLSafeUNet1(in_channels=3, out_channels=3, deconv=True)
+        self.unet2 = _DMLSafeUNet2(in_channels=3, out_channels=3, deconv=False)
 
     def forward(self, x):
         n, c, h0, w0 = x.shape
@@ -226,7 +283,7 @@ class _CUGAN2xONNX(nn.Module):
         x = F.pad(x, (18, 18 + pw - w0, 18, 18 + ph - h0), mode="reflect")
         x = self.unet1(x)
         x0 = self.unet2(x, alpha=1.0)
-        x = F.pad(x, (-20, -20, -20, -20))
+        x = x[:, :, 20:-20, 20:-20]  # upstream: F.pad(x, (-20, -20, -20, -20))
         out = x0 + x
         if w0 != pw or h0 != ph:
             out = out[:, :, : h0 * 2, : w0 * 2]

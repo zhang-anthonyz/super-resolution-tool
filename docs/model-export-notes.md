@@ -124,11 +124,63 @@ python scripts/export_onnx.py `
 | 内置导向滤波 s=1.0 | 22.80 | 0.5770 |
 | SwinIR 预降噪 s=1.0 | 25.38 | 0.7451 |
 
+### 2x 基线数值（2026-10 实测，`scripts/benchmark_set5.py`）
+
+2x 是一条**独立的口径**（不能与上面的 4x 表跨比）：`clean2x` = HR 双三次下采样 2 倍 → 模型放大 2 倍 → 与 HR 比；
+`real2x` = clean2x 的 LR 再叠加 GaussianBlur 0.8 + σ6（不含 JPEG）；`noisy2x` = clean2x 的 LR 加 σ25 噪声
+（即"降噪 + 放大"端到端口径，**降噪档位之间的差别主要看这一项**）。
+指标实现：PSNR 全通道 MSE；SSIM 灰度 + 11×11 高斯窗（σ=1.5，K1=0.01，K2=0.03，data_range=255）；
+`edge` = 灰度 3×3 Laplacian 绝对值均值。硬件同上，tile=512。
+
+| 模型 | clean2x PSNR/SSIM | real2x PSNR/SSIM | noisy2x PSNR/SSIM | edge(noisy) | 秒/张 |
+|---|---|---|---|---|---|
+| RealESRGAN_x2plus | 27.95 / 0.8672 | 27.07 / 0.8131 | 25.80 / 0.7775 | 11.25 | 0.07 |
+| realcugan-2x-no-denoise | 28.10 / 0.8903 | 26.90 / 0.8393 | 23.26 / 0.5579 | 20.00 | 0.01 |
+| realcugan-2x-denoise1x | 27.91 / 0.8878 | 26.68 / 0.8358 | 23.39 / 0.5716 | 18.13 | 0.01 |
+| realcugan-2x-denoise2x | 27.45 / 0.8762 | 26.41 / 0.8294 | 25.41 / 0.7742 | 11.23 | 0.01 |
+| realcugan-2x-denoise3x | 26.82 / 0.8553 | 26.04 / 0.8166 | **25.53 / 0.7919** | 10.93 | 0.01 |
+| **realcugan-2x-conservative** | **29.36 / 0.9074** | **27.46 / 0.8479** | 24.93 / 0.6445 | 12.62 | 0.01 |
+| *参照：纯双三次放大* | *31.79 / 0.9224* | — | — | *6.27* | *—* |
+
+怎么读这张表：
+
+- **双三次基线反而最高（31.79）**：这些模型是感知向训练的，在"双三次退化"这种完美可逆的输入上，
+  双三次放大本身就是 PSNR 最优解；模型的收益体现在 `edge`（细节/锐度，10–20 vs 6.27）与观感，
+  不是 PSNR。这与 4x 表里 `SwinIR_x4_classical` 靠 PSNR 取胜的取向正好相反。
+- **`conservative` 在干净/真实退化下最高**（29.36 / 27.46），符合它"最保守、最接近双三次"的定位。
+- **降噪档的价值在 `noisy2x` 上**：`no-denoise` 把噪声一起放大（edge 20.00、SSIM 0.5579），
+  `denoise2x`/`denoise3x` 反而比它高 **+2.1 / +2.3 dB**（25.41 / 25.53）——噪点图选 2x/3x 档，
+  干净图选 `conservative` 或 `no-denoise`。
+- 交叉校验：`RealESRGAN_x2plus` 本次 clean 档 PSNR=27.95 与更早一次独立评测的 27.95 完全一致
+  （SSIM 0.8672 vs 0.8664，差异来自 SSIM 实现细节），说明口径可复现。
+
 ## 3. 已知陷阱
 
+- **DirectML 会把负 padding 静默算错**（2026-10 实测，onnxruntime-directml 1.24.4）：
+  `F.pad(x, (-4, -4, -4, -4))`（即裁剪）lower 成的 Slice，DML EP 的 ends 处理有误——
+  探针实测 `max|diff| = 3.85`（CPU EP 为 0）。它**不报错、不崩溃**，只是产出一张
+  "看起来正常、实则错误"的图：Real-CUGAN 2x 因此在 Set5 上只有 **PSNR ≈ 7 dB**
+  （正常 ≈ 25 dB），而形状、dtype、各降噪档的相对差异全部正常，极易漏检。
+  修法：改用等价切片（`x[:, :, 4:-4, 4:-4]` 或 `torch.narrow`），实测在所有 EP 上正确。
+  导出器为此把上游 UNet 的两处负 pad 重写为切片（见 `scripts/export_onnx.py`
+  的 `_DMLSafeUNet1/2`），并给集成测试加了**保真度断言**（低频图 PSNR > 18 dB），
+  避免"形状对就算过"再次放过这类错误。
 - SCUNet 的公开 ONNX 在 **DirectML 上会进程级崩溃**（exit 0xC0000005，CPU EP 正常），
   故未采用；如需盲降噪优先考虑 DRUNet/DPIR 一类纯 CNN 结构。
 - 带外部数据（`.onnx` + `.onnx.data`）的模型需要 spec 一并打包 `*.data`，
   当前内置模型已全部避免该形式（单文件）。
 - SwinIR 在任意尺寸（含非窗口整数倍）下与 torch 输出完全一致，tile 拼接安全；
   实测 tile=200 与 tile=512 的 PSNR 完全相同。
+
+## 4. 复跑评测
+
+`scripts/benchmark_set5.py` 是上面所有数值的产出工具（只依赖 numpy + Pillow，
+不引入 scipy / scikit-image，SSIM 按文档口径自实现）：
+
+```powershell
+python scripts/benchmark_set5.py --gt-dir <Set5 HR 目录> --scale 2 --tests clean real noisy bicubic
+python scripts/benchmark_set5.py --gt-dir <Set5 HR 目录> --scale 4 --models SwinIR_x4_classical
+```
+
+`--tests` 里的 `bicubic` 是"不做超分"的参照线（双三次放大），建议始终带上——
+它能把"模型确实在做事"与"模型只是没把事情做坏"区分开。
