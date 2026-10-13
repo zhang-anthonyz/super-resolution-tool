@@ -2,9 +2,49 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from PIL import Image
 
 from app.core.sr_engine import OnnxEngine
 from app.core.types import Backend, ModelMeta, Scene
+
+
+def _psnr(reference: np.ndarray, candidate: np.ndarray) -> float:
+    mse = float(
+        np.mean((reference.astype(np.float64) - candidate.astype(np.float64)) ** 2)
+    )
+    return float("inf") if mse == 0 else 10 * np.log10(255.0**2 / mse)
+
+
+def _low_frequency_plate(size: int = 96) -> tuple[np.ndarray, np.ndarray]:
+    """A flat-block / slow-gradient image plus its bicubic 1/2 downscale.
+
+    Deliberately low-frequency: a correct 2x model reconstructs such content to
+    25-28 dB (measured), while the DirectML miscomputation bug scored 6-8 dB —
+    so this pair separates "runs" from "runs correctly" in a shape-blind way.
+    """
+    height = width = size
+    yy, xx = np.mgrid[0:height, 0:width].astype(np.float32)
+    image = np.stack(
+        [
+            128 + 60 * np.sin(2 * np.pi * xx / width),
+            128 + 60 * np.sin(2 * np.pi * yy / height),
+            128 + 60 * np.cos(2 * np.pi * (xx + yy) / (width + height)),
+        ],
+        axis=-1,
+    )
+    image[24:72, 24:72] = (200, 90, 70)
+    image[8:24, 8:88] = (60, 160, 210)
+    image = np.clip(image, 0, 255).astype(np.uint8)
+    lr = np.asarray(
+        Image.fromarray(image).resize(
+            (width // 2, height // 2), Image.Resampling.BICUBIC
+        )
+    )
+    return image, lr
+
+
+#: 保真度下限：正确模型 ≥25 dB，坏掉的 DirectML 计算 6-8 dB，取 18 dB 留裕度。
+_FIDELITY_FLOOR_DB = 18.0
 
 
 def _save_nearest_2x_model(path: Path) -> None:
@@ -113,20 +153,19 @@ def test_realesrgan_x2plus_loaded_and_shape_correct():
     assert "DmlExecutionProvider" in engine._session.get_providers()
     assert engine.precision_label == "fp16"
 
-    rng = np.random.default_rng(2026)
-    # tile_size=256 splits larger images, so 64x64 lands in a single tile.
-    image = rng.integers(0, 256, size=(64, 64, 3), dtype=np.uint8)
+    image, lr = _low_frequency_plate()
 
-    output = engine.upscale_image(image, scale=2)
-    assert output.shape == (128, 128, 3)
+    output = engine.upscale_image(lr, scale=2)
+    assert output.shape == (image.shape[0], image.shape[1], 3)
     assert output.dtype == np.uint8
     # The model is a learned 2x super-resolver, not a nearest resize, so the
     # output must differ from `np.repeat`-of-input at more than a few pixels.
-    nearest = np.repeat(np.repeat(image, 2, axis=0), 2, axis=1)
+    nearest = np.repeat(np.repeat(lr, 2, axis=0), 2, axis=1)
     assert np.abs(output.astype(np.int16) - nearest.astype(np.int16)).mean() > 1.0
-    # And it must not be saturated/garbage: the per-pixel std stays in the
-    # natural range for a photo (4 MP equivalent of detail).
-    assert 5.0 < output.std() < 80.0
+    # Fidelity: the reconstruction must match the source's low-frequency
+    # content (shape-and-std-only checks once let a DirectML miscomputation
+    # through with PSNR ~7 dB).
+    assert _psnr(image, output) > _FIDELITY_FLOOR_DB, _psnr(image, output)
 
 
 _CUGAN_2X_CHECKOUTS = tuple(
@@ -143,25 +182,20 @@ _cugan_available = all(
 def test_realcugan_2x_variants_load_and_differ_by_denoise_strength():
     """All five Real-CUGAN 2x denoise variants run under DirectML, produce the
     right shape, and are genuinely different models (a stronger denoise setting
-    must leave a smoother image than a weaker one)."""
+    must leave a smoother image than a weaker one).
+
+    Crucially this also checks *fidelity*: the output must actually reconstruct
+    the input's low-frequency content. A DirectML execution-provider bug once
+    made these models run silently wrong (PSNR ~7 dB) while still producing the
+    correct shape and plausible-looking variants, so shape-only assertions are
+    not enough.
+    """
     from app.models.model_manager import builtin_models
 
     registry = {model.name: model for model in builtin_models()}
-    rng = np.random.default_rng(11)
-    # Anime-ish test patch: flat blocks, a hard colour edge, and grain.
-    height = width = 96
-    yy, xx = np.mgrid[0:height, 0:width]
-    image = np.stack(
-        [
-            (xx * 2 % 256).astype(np.uint8),
-            (yy * 2 % 256).astype(np.uint8),
-            ((xx + yy) % 256).astype(np.uint8),
-        ],
-        axis=-1,
-    )
-    image[30:60, 30:70] = (240, 30, 60)
-    grain = rng.integers(-10, 10, image.shape, dtype=np.int16)
-    image = np.clip(image.astype(np.int16) + grain, 0, 255).astype(np.uint8)
+
+    image, lr = _low_frequency_plate()
+    height, width = image.shape[:2]
 
     outputs: dict[str, np.ndarray] = {}
     for name in _CUGAN_2X_CHECKOUTS:
@@ -171,9 +205,11 @@ def test_realcugan_2x_variants_load_and_differ_by_denoise_strength():
         engine.load_model(meta)
         assert "DmlExecutionProvider" in engine._session.get_providers()
         assert engine.precision_label == "fp16"
-        result = engine.upscale_image(image, scale=2)
-        assert result.shape == (height * 2, width * 2, 3)
+        result = engine.upscale_image(lr, scale=2)
+        assert result.shape == (height, width, 3)  # (h//2 * 2, w//2 * 2)
         assert result.dtype == np.uint8
+        # 保真度：输出必须重建出输入的低频内容（坏掉的 DML 版本只有 6-8 dB）
+        assert _psnr(image, result) > _FIDELITY_FLOOR_DB, (name, _psnr(image, result))
         outputs[name] = result
 
     # 每一档都是独立权重：与 no-denoise 档的输出必须有可见差别。
@@ -185,7 +221,18 @@ def test_realcugan_2x_variants_load_and_differ_by_denoise_strength():
     def smoothness(a: np.ndarray) -> float:
         return float(np.abs(np.diff(a.astype(np.float32), axis=1)).mean())
 
-    # 强降噪档必须比无降噪档更平滑（这是档位命名的含义所在）。
-    assert smoothness(outputs["realcugan-2x-denoise3x"]) < smoothness(
-        outputs["realcugan-2x-no-denoise"]
-    )
+    # 降噪档位语义：在**带噪声**的输入上，强降噪档必须显著更平滑。
+    # （干净图上各档平滑度并不单调——没有噪声可降时档位差异不体现在这里——
+    # 所以断言只在加噪场景下做，与 Set5 noisy2x 基线的结论一致。）
+    rng = np.random.default_rng(11)
+    noisy_lr = np.clip(
+        lr.astype(np.float64) + rng.normal(0.0, 25.0, lr.shape), 0, 255
+    ).astype(np.uint8)
+
+    smoothed: dict[str, float] = {}
+    for name in ("realcugan-2x-no-denoise", "realcugan-2x-denoise3x"):
+        engine = OnnxEngine(Backend.DIRECTML)
+        engine.load_model(registry[name])
+        smoothed[name] = smoothness(engine.upscale_image(noisy_lr, scale=2))
+
+    assert smoothed["realcugan-2x-denoise3x"] < smoothed["realcugan-2x-no-denoise"], smoothed
