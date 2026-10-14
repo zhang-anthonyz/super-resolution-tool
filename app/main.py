@@ -9,8 +9,10 @@ from typing import Optional
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QMessageBox
 
+from app.core.app_settings import load_settings
 from app.core.environment_checker import EnvironmentCheckError, check_environment
 from app.core.paths import app_root
 from app.core.task_log import configure_logging
@@ -24,15 +26,43 @@ def _is_verbose(args: list[str]) -> bool:
     return any(flag in args for flag in ("-v", "--verbose", "--debug"))
 
 
+def _system_dark(app: QApplication) -> Optional[bool]:
+    """Best-effort read of the OS dark-mode preference (None if unknown)."""
+    try:
+        scheme = app.styleHints().colorScheme()
+    except Exception:
+        return None
+    if scheme == Qt.ColorScheme.Dark:
+        return True
+    if scheme == Qt.ColorScheme.Light:
+        return False
+    return None
+
+
 def create_main_window(gpu: Optional[GpuInfo] = None) -> MainWindow:
     """Create the main window using a supplied GPU or an environment check."""
     app = QApplication.instance()
     if app is None:
         app = QApplication([])
-    theme.apply_app_theme(app)
+    saved = load_settings()
+    saved_mode = saved.get("theme_mode", "system")
+    if saved_mode not in ("system", "light", "dark"):
+        saved_mode = "system"
+    theme.apply_app_theme(app, mode=saved_mode)
     if gpu is None:
         gpu = check_environment()
-    return MainWindow(gpu)
+    window = MainWindow(gpu, theme_mode=saved_mode)
+    # Live OS switching only matters when the user picked "follow system".
+    if saved_mode == "system":
+        try:
+            app.styleHints().colorSchemeChanged.connect(
+                lambda _scheme: window._sync_theme_for_resolved(
+                    "dark" if _system_dark(app) else "light"
+                )
+            )
+        except Exception:
+            pass
+    return window
 
 
 def _run_headless_smoke() -> int:
@@ -113,7 +143,11 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     app = QApplication.instance() or QApplication(args)
     app.setApplicationName("Super Resolution Tool")
-    theme.apply_app_theme(app)
+    saved = load_settings()
+    saved_mode = saved.get("theme_mode", "system")
+    if saved_mode not in ("system", "light", "dark"):
+        saved_mode = "system"
+    theme.apply_app_theme(app, mode=saved_mode)
 
     try:
         gpu = check_environment()
@@ -125,8 +159,17 @@ def main(argv: Optional[list[str]] = None) -> int:
         )
         return 1
 
-    window = MainWindow(gpu)
+    window = MainWindow(gpu, theme_mode=saved_mode)
     window.show()
+    if saved_mode == "system":
+        try:
+            app.styleHints().colorSchemeChanged.connect(
+                lambda _scheme: window._sync_theme_for_resolved(
+                    "dark" if _system_dark(app) else "light"
+                )
+            )
+        except Exception:
+            pass
     return app.exec()
 
 

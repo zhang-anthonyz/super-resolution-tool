@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 from typing import Optional, Sequence
 
-from PySide6.QtCore import Qt, QThread
+from PySide6.QtCore import Qt, QThread, QTimer, QPropertyAnimation, QEasingCurve
 from PySide6.QtGui import QColor, QFont, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (
     QApplication,
@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QFrame,
     QGraphicsDropShadowEffect,
+    QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -54,16 +55,25 @@ from . import ui_logic
 from . import theme
 from .ui_logic import BackendChoice
 from .model_selector import ModelSelector
-from .widgets import ChevronComboBox
+from .widgets import (
+    BackdropWidget,
+    ChevronComboBox,
+    GlassButton,
+    GlassFrame,
+    GlassProgressBar,
+    PlusMinusSpinBox,
+    stagger_list_items,
+)
 from . import compare_view
 from .workers import ImageUpscaleWorker, VideoUpscaleWorker
 
 
-_PROGRESS_CHUNK_QSS = "QProgressBar::chunk { background-color: %s; border-radius: 5px; }"
-_PROGRESS_COLOR_SUCCESS = theme.SUCCESS
-_PROGRESS_COLOR_ERROR = theme.DANGER
-_PROGRESS_COLOR_PARTIAL = theme.WARNING
-_PROGRESS_COLOR_CANCELLED = theme.NEUTRAL
+#: Progress-bar chunk families, by name — ``GlassProgressBar.set_state`` owns
+#: the actual colours so they stay in step with the active theme.
+_PROGRESS_STATE_SUCCESS = "success"
+_PROGRESS_STATE_ERROR = "error"
+_PROGRESS_STATE_PARTIAL = "warning"
+_PROGRESS_STATE_CANCELLED = "cancelled"
 
 
 VIDEO_CODEC_OPTIONS: tuple[tuple[VideoCodec, str], ...] = (
@@ -88,7 +98,7 @@ class ScaleSelector(QWidget):
         self.combo.addItem("自定义", None)
         self.combo.setCurrentIndex(2)
 
-        self.custom_spin = QSpinBox()
+        self.custom_spin = PlusMinusSpinBox()
         self.custom_spin.setRange(2, 8)
         self.custom_spin.setValue(4)
         self.custom_spin.setEnabled(False)
@@ -138,9 +148,9 @@ class LogPanel(QFrame):
         title.setObjectName("cardTitle")
         header.addWidget(title)
         header.addStretch(1)
-        copy_button = QPushButton("复制")
+        copy_button = GlassButton("复制")
         copy_button.setObjectName("ghostButton")
-        clear_button = QPushButton("清空")
+        clear_button = GlassButton("清空")
         clear_button.setObjectName("ghostButton")
         copy_button.clicked.connect(self.copy_to_clipboard)
         clear_button.clicked.connect(self.clear)
@@ -178,7 +188,12 @@ class LogPanel(QFrame):
 class MainWindow(QMainWindow):
     """Top-level application window with image, video, and settings tabs."""
 
-    def __init__(self, gpu: GpuInfo, parent: Optional[QWidget] = None) -> None:
+    def __init__(
+        self,
+        gpu: GpuInfo,
+        parent: Optional[QWidget] = None,
+        theme_mode: str = "system",
+    ) -> None:
         super().__init__(parent)
         self.gpu = gpu
         self.backend_selector = BackendSelector(gpu)
@@ -196,6 +211,17 @@ class MainWindow(QMainWindow):
         self._video_progress_last_time = 0.0
         self._video_progress_last_frame = -1
         self._settings = load_settings()
+        # Theme: a caller-supplied mode wins — but "system" is also a valid
+        # *user* choice, so it must not shadow what was saved. An earlier
+        # version kept the constructor value in a separate "override" field
+        # and applied it ahead of the live choice, which made the settings
+        # switch look like it needed a restart.
+        stored_mode = self._settings.get("theme_mode")
+        self._theme_mode = (
+            theme_mode if theme_mode in ("system", "light", "dark") else "system"
+        )
+        if self._theme_mode == "system" and stored_mode in ("system", "light", "dark"):
+            self._theme_mode = stored_mode
 
         self.setWindowTitle("Super Resolution Tool · 本地超分工作台")
         self.resize(1240, 840)
@@ -223,8 +249,7 @@ class MainWindow(QMainWindow):
     )
 
     def _build_ui(self) -> None:
-        root = QWidget()
-        root.setObjectName("appRoot")
+        root = BackdropWidget()
         root_layout = QHBoxLayout(root)
         root_layout.setContentsMargins(0, 0, 0, 0)
         root_layout.setSpacing(0)
@@ -270,7 +295,7 @@ class MainWindow(QMainWindow):
             section_label.setObjectName("navSection")
             layout.addWidget(section_label)
             for title in titles:
-                button = QPushButton(title)
+                button = GlassButton(title)
                 button.setObjectName("navButton")
                 button.setCheckable(True)
                 button.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -322,7 +347,7 @@ class MainWindow(QMainWindow):
         return content
 
     def _build_header(self) -> QWidget:
-        card = QFrame()
+        card = GlassFrame()
         card.setObjectName("headerCard")
         shadow = QGraphicsDropShadowEffect(card)
         shadow.setBlurRadius(26)
@@ -353,11 +378,46 @@ class MainWindow(QMainWindow):
 
     def _set_page(self, index: int) -> None:
         """Switch the visible page and keep header + nav rail in sync."""
+        previous_index = self.stack.currentIndex()
         self.stack.setCurrentIndex(index)
+        if previous_index != index:
+            self._animate_page_transition(index)
         title, subtitle = self.PAGE_META[index]
         self.header_title.setText(title)
         self.header_subtitle.setText(subtitle)
         self._nav_buttons[index].setChecked(True)
+
+    def _animate_page_transition(self, target_index: int) -> None:
+        """Fade-in the newly-selected page over 180ms.
+
+        Switching pages synchronously keeps ``QStackedWidget.currentIndex``
+        and any test that reads it honest; the fade-in is purely additive
+        polish and is skipped when the result would be invisible anyway
+        (no point animating a stack that holds offscreen test widgets).
+        """
+        target = self.stack.widget(target_index)
+        if target is None:
+            return
+        # Skipping on offscreen renders keeps the offscreen audit (and tests)
+        # from contending with a running animation while they try to ``grab()``
+        # the window.
+        if not self.isVisible():
+            return
+        if not target.graphicsEffect():
+            target.setGraphicsEffect(QGraphicsOpacityEffect(target))
+        effect = target.graphicsEffect()
+        assert isinstance(effect, QGraphicsOpacityEffect)
+        effect.setOpacity(0.0)
+        fade = QPropertyAnimation(effect, b"opacity", self.stack)
+        fade.setDuration(180)
+        fade.setStartValue(0.0)
+        fade.setEndValue(1.0)
+        fade.setEasingCurve(QEasingCurve.Type.OutCubic)
+        # Land on exactly 1.0: an interrupted fade would otherwise leave a
+        # page stuck at partial opacity.
+        fade.finished.connect(lambda: effect.setOpacity(1.0))
+        fade.start()
+        self._page_fade = fade
 
     # --------------------------------------------------------- card helpers --
     def _make_scroll_page(self) -> tuple[QScrollArea, QVBoxLayout]:
@@ -376,8 +436,8 @@ class MainWindow(QMainWindow):
         return scroll, layout
 
     def _make_card(self, title: str, hint: str = "") -> tuple[QFrame, QVBoxLayout]:
-        """Create a white card with a title row, divider and body layout."""
-        card = QFrame()
+        """Create a translucent glass card with a title row, divider and body layout."""
+        card = GlassFrame()
         card.setObjectName("card")
 
         outer = QVBoxLayout(card)
@@ -453,11 +513,29 @@ class MainWindow(QMainWindow):
         device_body.addLayout(device_form)
         layout.addWidget(device_card)
 
+        appearance_card, appearance_body = self._make_card(
+            "外观",
+            "跟随系统可自动切换；切换立刻生效",
+        )
+        appearance_form = self._make_form()
+        appearance_form.addRow(
+            self._form_label("主题"),
+            self._build_theme_switcher(),
+        )
+        appearance_hint = QLabel(
+            "浅色 / 深色：自定义当前外观。跟随系统：与 Windows 设置一致。"
+        )
+        appearance_hint.setObjectName("mutedLabel")
+        appearance_hint.setWordWrap(True)
+        appearance_body.addLayout(appearance_form)
+        appearance_body.addWidget(appearance_hint)
+        layout.addWidget(appearance_card)
+
         import_card, import_body = self._make_card(
             "自定义模型",
             "导入 ONNX 模型后可在此后各任务中选用",
         )
-        self.import_model_button = QPushButton("导入 ONNX 模型到模型库")
+        self.import_model_button = GlassButton("导入 ONNX 模型到模型库")
         self.import_model_button.setObjectName("softButton")
         self.import_model_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.import_model_button.clicked.connect(self._import_custom_model)
@@ -479,6 +557,87 @@ class MainWindow(QMainWindow):
         layout.addStretch(1)
         return scroll
 
+    def _build_theme_switcher(self) -> QWidget:
+        """Three segmented buttons — 系统 / 浅色 / 深色 — wired to the active mode."""
+        row = QWidget()
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(6)
+        self._theme_buttons: dict[str, QPushButton] = {}
+        self._theme_group = QButtonGroup(self)
+        self._theme_group.setExclusive(True)
+        for label, mode in (("跟随系统", "system"), ("浅色", "light"), ("深色", "dark")):
+            button = GlassButton(label)
+            button.setObjectName("segmentButton")
+            button.setCheckable(True)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            button.clicked.connect(lambda _checked=False, m=mode: self._set_theme_mode(m))
+            self._theme_group.addButton(button)
+            self._theme_buttons[mode] = button
+            row_layout.addWidget(button)
+        row_layout.addStretch(1)
+        self._refresh_theme_switcher()
+        return row
+
+    def _refresh_theme_switcher(self) -> None:
+        """Sync the segmented buttons to the current effective mode choice."""
+        buttons = getattr(self, "_theme_buttons", None)
+        if not buttons:
+            return
+        active = self._theme_mode
+        for mode, button in buttons.items():
+            button.blockSignals(True)
+            button.setChecked(mode == active)
+            button.blockSignals(False)
+
+    def _set_theme_mode(self, mode: str) -> None:
+        """Persist a new theme choice and apply it on the spot."""
+        if mode not in ("system", "light", "dark") or mode == self._theme_mode:
+            return
+        self._theme_mode = mode
+        self._apply_window_theme()
+        self._refresh_theme_switcher()
+        self._settings["theme_mode"] = mode
+        save_settings(self._settings)
+
+    def _apply_window_theme(self) -> None:
+        """Apply ``self._theme_mode`` to the whole application.
+
+        ``apply_app_theme`` swaps the stylesheet, palace and font and then
+        re-polishes every live widget, so the change is visible immediately —
+        no restart, and no half-themed window.
+        """
+        app = QApplication.instance()
+        if app is None:
+            return
+        theme.apply_app_theme(app, self._theme_mode)
+        # The backdrop caches its mesh in a pixmap; drop it (it also keys on
+        # the mode, but the explicit invalidate keeps the intent obvious).
+        root = self.centralWidget()
+        if isinstance(root, BackdropWidget):
+            root.invalidate()
+        self.update()
+
+    def _sync_theme_for_resolved(self, resolved: str) -> None:
+        """Hook for main.py when the OS flips between light and dark.
+
+        Only meaningful while the user is on "system"; an explicit choice is
+        left alone.
+        """
+        if self._theme_mode != "system":
+            return
+        app = QApplication.instance()
+        if app is None:
+            return
+        # Rebuild the stylesheet too — the QSS tokens differ per mode, so
+        # updating the cached colour alone would leave the old theme painted.
+        theme.apply_app_theme(app, "system", resolved=resolved)
+        root = self.centralWidget()
+        if isinstance(root, BackdropWidget):
+            root.invalidate()
+        self.update()
+
     def _available_backend_text(self) -> str:
         labels = [
             choice.display_label
@@ -496,11 +655,11 @@ class MainWindow(QMainWindow):
         self.image_list.setMinimumHeight(150)
         input_buttons = QHBoxLayout()
         input_buttons.setSpacing(8)
-        self.image_add_files_button = QPushButton("添加文件")
+        self.image_add_files_button = GlassButton("添加文件")
         self.image_add_files_button.setObjectName("softButton")
-        self.image_add_folder_button = QPushButton("添加文件夹")
+        self.image_add_folder_button = GlassButton("添加文件夹")
         self.image_add_folder_button.setObjectName("softButton")
-        self.image_remove_button = QPushButton("移除选中")
+        self.image_remove_button = GlassButton("移除选中")
         self.image_remove_button.setObjectName("ghostButton")
         self.image_add_files_button.clicked.connect(self._add_image_files)
         self.image_add_folder_button.clicked.connect(self._add_image_folder)
@@ -540,7 +699,7 @@ class MainWindow(QMainWindow):
         output_layout.setContentsMargins(0, 0, 0, 0)
         output_layout.setSpacing(8)
         output_layout.addWidget(self.image_output_dir_edit, 1)
-        self.image_output_button = QPushButton("浏览")
+        self.image_output_button = GlassButton("浏览")
         self.image_output_button.setObjectName("softButton")
         self.image_output_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.image_output_button.clicked.connect(self._browse_image_output)
@@ -552,7 +711,7 @@ class MainWindow(QMainWindow):
         self.image_resize_mode_combo.addItem(
             "按百分比等比例缩放（相对超分结果）", "percent"
         )
-        self.image_resize_percent_spin = QSpinBox()
+        self.image_resize_percent_spin = PlusMinusSpinBox()
         self.image_resize_percent_spin.setRange(
             _PERCENT_MIN, _PERCENT_MAX
         )
@@ -589,7 +748,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(output_card)
 
         run_card, run_body = self._make_card("任务", "运行中可随时取消")
-        self.image_progress = QProgressBar()
+        self.image_progress = GlassProgressBar()
         self.image_progress.setRange(0, 1000)
         self.image_progress.setValue(0)
         self.image_progress.setTextVisible(False)
@@ -597,11 +756,11 @@ class MainWindow(QMainWindow):
         self.image_status.setObjectName("statusLabel")
         controls = QHBoxLayout()
         controls.setSpacing(8)
-        self.image_start_button = QPushButton("开始超分")
+        self.image_start_button = GlassButton("开始超分")
         self.image_start_button.setObjectName("primaryButton")
         self.image_start_button.setMinimumWidth(118)
         self.image_start_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.image_cancel_button = QPushButton("取消")
+        self.image_cancel_button = GlassButton("取消")
         self.image_cancel_button.setObjectName("cancelButton")
         self.image_cancel_button.setEnabled(False)
         controls.addWidget(self.image_status, 1)
@@ -670,7 +829,7 @@ class MainWindow(QMainWindow):
         video_input_layout.setContentsMargins(0, 0, 0, 0)
         video_input_layout.setSpacing(8)
         video_input_layout.addWidget(self.video_input_edit, 1)
-        self.video_input_button = QPushButton("浏览")
+        self.video_input_button = GlassButton("浏览")
         self.video_input_button.setObjectName("softButton")
         self.video_input_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.video_input_button.clicked.connect(self._browse_video_input)
@@ -682,7 +841,7 @@ class MainWindow(QMainWindow):
         video_output_layout.setContentsMargins(0, 0, 0, 0)
         video_output_layout.setSpacing(8)
         video_output_layout.addWidget(self.video_output_dir_edit, 1)
-        self.video_output_button = QPushButton("浏览")
+        self.video_output_button = GlassButton("浏览")
         self.video_output_button.setObjectName("softButton")
         self.video_output_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.video_output_button.clicked.connect(self._browse_video_output)
@@ -719,7 +878,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(output_card)
 
         run_card, run_body = self._make_card("任务", "运行中可随时取消")
-        self.video_progress = QProgressBar()
+        self.video_progress = GlassProgressBar()
         self.video_progress.setRange(0, 1000)
         self.video_progress.setValue(0)
         self.video_progress.setTextVisible(False)
@@ -727,11 +886,11 @@ class MainWindow(QMainWindow):
         self.video_status.setObjectName("statusLabel")
         controls = QHBoxLayout()
         controls.setSpacing(8)
-        self.video_start_button = QPushButton("开始超分")
+        self.video_start_button = GlassButton("开始超分")
         self.video_start_button.setObjectName("primaryButton")
         self.video_start_button.setMinimumWidth(118)
         self.video_start_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.video_cancel_button = QPushButton("取消")
+        self.video_cancel_button = GlassButton("取消")
         self.video_cancel_button.setObjectName("cancelButton")
         self.video_cancel_button.setEnabled(False)
         controls.addWidget(self.video_status, 1)
@@ -922,6 +1081,10 @@ class MainWindow(QMainWindow):
     def _add_image_paths(self, paths: Sequence[str]) -> None:
         files = ui_logic.collect_image_files(paths)
         existing = self._image_path_set()
+        new_rows: list[int] = []
+        # Snapshot the row count first so the indices refer to items added in
+        # this call only (and so the cascade only animates the new arrivals).
+        first_row = self.image_list.count()
         for path in files:
             if path in existing:
                 continue
@@ -930,6 +1093,9 @@ class MainWindow(QMainWindow):
             item.setData(Qt.ItemDataRole.UserRole, str(path))
             self.image_list.addItem(item)
             existing.add(path)
+            new_rows.append(first_row + len(new_rows))
+        if new_rows:
+            stagger_list_items(self.image_list, new_rows)
         if not files and paths:
             self.image_log.append("Warning", "未找到 jpg/png/webp 图片")
         self.image_status.setText(f"已添加 {self.image_list.count()} 张图片")
@@ -1001,11 +1167,24 @@ class MainWindow(QMainWindow):
         if folder:
             self.video_output_dir_edit.setText(folder)
 
-    def _set_progress_color(self, bar: QProgressBar, color: str) -> None:
-        bar.setStyleSheet(_PROGRESS_CHUNK_QSS % color)
+    def _set_progress_color(self, bar: GlassProgressBar, color_name: str) -> None:
+        """Switch the progress-bar chunk palette by semantic state name.
 
-    def _reset_progress_color(self, bar: QProgressBar) -> None:
-        bar.setStyleSheet("")
+        The actual chunk gradient is now painted by ``GlassProgressBar`` itself;
+        we just tell it which colour family to use. The ``color_name`` argument
+        accepts the same labels (``success`` / ``error`` / ``warning`` /
+        ``cancelled``) the task layer has always passed.
+        """
+        try:
+            bar.set_state(color_name)
+        except ValueError:
+            bar.set_state("normal")
+
+    def _reset_progress_color(self, bar: GlassProgressBar) -> None:
+        try:
+            bar.set_state("normal")
+        except ValueError:
+            return
 
     def _reset_image_progress(self) -> None:
         self.image_progress.setRange(0, 1000)
@@ -1444,11 +1623,11 @@ class MainWindow(QMainWindow):
         self.image_progress.setRange(0, 1000)
         self.image_progress.setValue(1000 if results else 0)
         if results and fail_count == 0:
-            self._set_progress_color(self.image_progress, _PROGRESS_COLOR_SUCCESS)
+            self._set_progress_color(self.image_progress, _PROGRESS_STATE_SUCCESS)
         elif ok_count == 0:
-            self._set_progress_color(self.image_progress, _PROGRESS_COLOR_ERROR)
+            self._set_progress_color(self.image_progress, _PROGRESS_STATE_ERROR)
         else:
-            self._set_progress_color(self.image_progress, _PROGRESS_COLOR_PARTIAL)
+            self._set_progress_color(self.image_progress, _PROGRESS_STATE_PARTIAL)
         self.image_status.setText(
             f"完成：成功 {ok_count} / 失败 {fail_count}"
         )
@@ -1480,7 +1659,7 @@ class MainWindow(QMainWindow):
         self._set_image_running(False)
         self.image_progress.setRange(0, 1000)
         self.image_progress.setValue(0)
-        self._set_progress_color(self.image_progress, _PROGRESS_COLOR_ERROR)
+        self._set_progress_color(self.image_progress, _PROGRESS_STATE_ERROR)
         self.image_status.setText("处理失败")
         self.image_log.append("Error", message)
         self._cleanup_image_worker()
@@ -1489,7 +1668,7 @@ class MainWindow(QMainWindow):
         self._set_image_running(False)
         self.image_progress.setRange(0, 1000)
         self.image_progress.setValue(0)
-        self._set_progress_color(self.image_progress, _PROGRESS_COLOR_CANCELLED)
+        self._set_progress_color(self.image_progress, _PROGRESS_STATE_CANCELLED)
         self.image_status.setText("已取消")
         self.image_log.append("Warning", "任务已取消")
         self._cleanup_image_worker()
@@ -1498,7 +1677,7 @@ class MainWindow(QMainWindow):
         self._set_video_running(False)
         self.video_progress.setRange(0, 1000)
         self.video_progress.setValue(1000)
-        self._set_progress_color(self.video_progress, _PROGRESS_COLOR_SUCCESS)
+        self._set_progress_color(self.video_progress, _PROGRESS_STATE_SUCCESS)
         self.video_status.setText("完成")
         elapsed = float(getattr(result, "elapsed_seconds", 0.0) or 0.0)
         self.video_log.append(
@@ -1512,7 +1691,7 @@ class MainWindow(QMainWindow):
         self._set_video_running(False)
         self.video_progress.setRange(0, 1000)
         self.video_progress.setValue(0)
-        self._set_progress_color(self.video_progress, _PROGRESS_COLOR_ERROR)
+        self._set_progress_color(self.video_progress, _PROGRESS_STATE_ERROR)
         self.video_status.setText("处理失败")
         self.video_log.append("Error", message)
         self._cleanup_video_worker()
@@ -1521,7 +1700,7 @@ class MainWindow(QMainWindow):
         self._set_video_running(False)
         self.video_progress.setRange(0, 1000)
         self.video_progress.setValue(0)
-        self._set_progress_color(self.video_progress, _PROGRESS_COLOR_CANCELLED)
+        self._set_progress_color(self.video_progress, _PROGRESS_STATE_CANCELLED)
         self.video_status.setText("已取消")
         self.video_log.append("Warning", "任务已取消")
         self._cleanup_video_worker()
@@ -1583,4 +1762,5 @@ class MainWindow(QMainWindow):
 
     def _apply_style(self) -> None:
         self.setFont(QFont(theme.UI_FONT_FAMILY, theme.UI_FONT_POINT_SIZE))
-        self.setStyleSheet(theme.APP_STYLESHEET)
+        self._apply_window_theme()
+        self._refresh_theme_switcher()
