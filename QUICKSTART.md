@@ -66,6 +66,8 @@ python app\main.py            # 启动界面
 python app\main.py --headless # 无界面自检
 ```
 
+主题可在「设置 → 外观」里选 `跟随系统 / 浅色 / 深色`，深色模式整套配色（背板渐变与玻璃卡的 RGBA）自动切换，关闭重开不丢。
+
 可选配置：把 `config.example.yaml` 复制为 `config.yaml`，可覆盖 FFmpeg / ffprobe / ncnn 路径、默认后端、
 视频编码参数、模型缓存目录。配置缺失时全部走内置默认值，**不配也能跑**。
 
