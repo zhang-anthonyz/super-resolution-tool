@@ -1,18 +1,30 @@
 """Centralized application theme: design tokens + Qt stylesheet.
 
-The visual system is a modern light surface stack: a soft blue-grey canvas
-(``#F5F7FA``), white elevated cards, and a single blue action colour. Green,
-amber and red are reserved for semantic status feedback only.
+Two parallel palettes share a single stylesheet template. The light variant
+keeps the existing tokens (still required for the ``#F5F7FA`` substring in
+``test_theme.py``); the dark variant is a parallel set tuned for a slate-900
+canvas with vibrant accents. Both palettes declare the same set of
+substitution keys, so the QSS structure never drifts between modes.
 
-Colours are declared once as module constants and injected into the Qt
-stylesheet template, so Python-side painting (log colours, progress colours)
-and QSS never drift apart.
+Public surface (kept stable for backward compatibility with imports):
+
+* Token constants: ``BG_APP`` / ``SURFACE`` / ``ACCENT`` …  (light variant)
+* Parallel dark constants: ``DARK_BG_APP`` / ``DARK_SURFACE`` / ``DARK_ACCENT`` …
+* Aggregate dicts: ``LIGHT_TOKENS`` / ``DARK_TOKENS``
+* Stylesheets: ``APP_STYLESHEET`` (= light) + ``DARK_APP_STYLESHEET``
+* Palette builders: ``build_palette(mode)``
+* Apply entry points: ``apply_app_theme(app, mode, resolved=None)``
+
+Mode is one of "light" / "dark" / "system". ``apply_app_theme`` resolves
+"system" once via ``QStyleHints.colorScheme()`` (PySide6 6.5+) and honours
+``resolved`` if the caller already detected it.
 """
 from __future__ import annotations
 
 from string import Template
+from typing import Optional
 
-# --- Canvas & surfaces ----------------------------------------------------
+# ----------------------------------------------------------------- LIGHT ---
 BG_APP = "#F5F7FA"
 SURFACE = "#FFFFFF"
 SURFACE_MUTED = "#F8FAFC"
@@ -22,14 +34,12 @@ BORDER = "#E6EBF3"
 BORDER_STRONG = "#D6DEEA"
 DIVIDER = "#EEF2F8"
 
-# --- Typography colours ---------------------------------------------------
 TEXT = "#1F2937"
 TEXT_STRONG = "#1E293B"
 TEXT_SECONDARY = "#4B5C72"
 TEXT_MUTED = "#7C8AA0"
 TEXT_FAINT = "#9AA7BA"
 
-# --- Accent ---------------------------------------------------------------
 ACCENT = "#2563EB"
 ACCENT_HOVER = "#1D4ED8"
 ACCENT_PRESSED = "#1E40AF"
@@ -37,14 +47,68 @@ ACCENT_SOFT = "#EFF6FF"
 ACCENT_SOFT_BORDER = "#BFDBFE"
 ACCENT_SOFT_TEXT = "#1E40AF"
 ACCENT_DISABLED = "#B9CDF6"
+#: Highlight color of the gradient that flows across the progress-bar chunk.
+ACCENT_LIGHT = "#60A5FA"
 
-# --- Semantic -------------------------------------------------------------
 SUCCESS = "#16A34A"
 WARNING = "#D97706"
 DANGER = "#DC2626"
 NEUTRAL = "#94A3B8"
 DANGER_SOFT = "#FEF2F2"
 DANGER_SOFT_BORDER = "#FCA5A5"
+
+#: Glass-surface alpha (card / sidebar over the mesh-gradient backdrop).
+LIGHT_CARD_ALPHA = "0.62"
+LIGHT_SIDEBAR_ALPHA = "0.70"
+LIGHT_HEADER_ALPHA = "0.70"
+LIGHT_HOVER_ALPHA = "0.74"
+LIGHT_PRESSED_ALPHA = "0.80"
+#: Inner-edge highlight on every glass surface (top-left rim).
+LIGHT_GLASS_RIM = "rgba(255, 255, 255, 0.85)"
+#: Subtle border between the transparent card and the backdrop.
+LIGHT_GLASS_BORDER = "rgba(148, 163, 184, 0.40)"
+
+# ------------------------------------------------------------------ DARK ---
+#: Slate-900-ish canvas; deliberately not ``#000000`` nor ``#10151f`` (those
+#: are forbidden by ``tests/test_theme.py``).
+DARK_BG_APP = "#0F172A"
+DARK_SURFACE = "#1E293B"
+DARK_SURFACE_MUTED = "#172033"
+DARK_SURFACE_HOVER = "#22304A"
+DARK_SURFACE_PRESSED = "#2A3957"
+DARK_BORDER = "#27344B"
+DARK_BORDER_STRONG = "#3A4865"
+DARK_DIVIDER = "#1F2A3D"
+
+DARK_TEXT = "#E2E8F0"
+DARK_TEXT_STRONG = "#F8FAFC"
+DARK_TEXT_SECONDARY = "#B6C2D4"
+DARK_TEXT_MUTED = "#8B97AB"
+DARK_TEXT_FAINT = "#64748B"
+
+DARK_ACCENT = "#60A5FA"
+DARK_ACCENT_HOVER = "#3B82F6"
+DARK_ACCENT_PRESSED = "#2563EB"
+DARK_ACCENT_SOFT = "#172554"
+DARK_ACCENT_SOFT_BORDER = "#3B82F6"
+DARK_ACCENT_SOFT_TEXT = "#93C5FD"
+DARK_ACCENT_DISABLED = "#3F4D6E"
+DARK_ACCENT_LIGHT = "#93C5FD"
+
+DARK_SUCCESS = "#4ADE80"
+DARK_WARNING = "#FBBF24"
+DARK_DANGER = "#F87171"
+DARK_NEUTRAL = "#64748B"
+DARK_DANGER_SOFT = "#3B1118"
+DARK_DANGER_SOFT_BORDER = "#7F1D1D"
+
+DARK_CARD_ALPHA = "0.62"
+DARK_SIDEBAR_ALPHA = "0.72"
+DARK_HEADER_ALPHA = "0.65"
+DARK_HOVER_ALPHA = "0.74"
+DARK_PRESSED_ALPHA = "0.80"
+DARK_GLASS_RIM = "rgba(255, 255, 255, 0.10)"
+DARK_GLASS_BORDER = "rgba(255, 255, 255, 0.08)"
 
 # --- Fonts ----------------------------------------------------------------
 UI_FONT = '"Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI"'
@@ -60,8 +124,128 @@ LOG_LEVEL_COLORS = {
     "Success": "#15803D",
 }
 
+# --- Token aggregates ------------------------------------------------------
+LIGHT_TOKENS = {
+    "BG_APP": BG_APP,
+    "SURFACE": SURFACE,
+    "SURFACE_MUTED": SURFACE_MUTED,
+    "SURFACE_HOVER": SURFACE_HOVER,
+    "SURFACE_PRESSED": SURFACE_PRESSED,
+    "BORDER": BORDER,
+    "BORDER_STRONG": BORDER_STRONG,
+    "DIVIDER": DIVIDER,
+    "TEXT": TEXT,
+    "TEXT_STRONG": TEXT_STRONG,
+    "TEXT_SECONDARY": TEXT_SECONDARY,
+    "TEXT_MUTED": TEXT_MUTED,
+    "TEXT_FAINT": TEXT_FAINT,
+    "ACCENT": ACCENT,
+    "ACCENT_HOVER": ACCENT_HOVER,
+    "ACCENT_PRESSED": ACCENT_PRESSED,
+    "ACCENT_SOFT": ACCENT_SOFT,
+    "ACCENT_SOFT_BORDER": ACCENT_SOFT_BORDER,
+    "ACCENT_SOFT_TEXT": ACCENT_SOFT_TEXT,
+    "ACCENT_DISABLED": ACCENT_DISABLED,
+    "ACCENT_LIGHT": ACCENT_LIGHT,
+    "SUCCESS": SUCCESS,
+    "WARNING": WARNING,
+    "DANGER": DANGER,
+    "NEUTRAL": NEUTRAL,
+    "DANGER_SOFT": DANGER_SOFT,
+    "DANGER_SOFT_BORDER": DANGER_SOFT_BORDER,
+    # Glass RGB: the underlying colour rendered through the alpha mask.
+    # Light glass = white over a light backdrop.
+    "GLASS_RGB": "255, 255, 255",
+    "CARD_ALPHA": LIGHT_CARD_ALPHA,
+    "SIDEBAR_ALPHA": LIGHT_SIDEBAR_ALPHA,
+    "HEADER_ALPHA": LIGHT_HEADER_ALPHA,
+    "HOVER_ALPHA": LIGHT_HOVER_ALPHA,
+    "PRESSED_ALPHA": LIGHT_PRESSED_ALPHA,
+    "GLASS_RIM": LIGHT_GLASS_RIM,
+    "GLASS_BORDER": LIGHT_GLASS_BORDER,
+    "INPUT_ALPHA": "0.62",
+    "BUTTON_ALPHA": "0.62",
+    "LIST_ALPHA": "0.62",
+    "CHECK_ALPHA": "0.62",
+    "GROOVE_ALPHA": "0.22",
+    "TRACK_ALPHA": "0.25",
+    "ITEM_HOVER_ALPHA": "0.85",
+    "FOOTER_RGB": "148, 163, 184",
+    "FOOTER_ALPHA": "0.18",
+    "PROGRESS_BG_RGB": "148, 163, 184",
+    "PROGRESS_BG_ALPHA": "0.22",
+    "CHECKBOX_BG_RGB": "255, 255, 255",
+    "CHECKBOX_BG_ALPHA": "0.62",
+    "BRAND_STOP_0": "#60A5FA",
+    "UI_FONT": UI_FONT,
+    "MONO_FONT": MONO_FONT,
+}
+
+DARK_TOKENS = {
+    "BG_APP": DARK_BG_APP,
+    "SURFACE": DARK_SURFACE,
+    "SURFACE_MUTED": DARK_SURFACE_MUTED,
+    "SURFACE_HOVER": DARK_SURFACE_HOVER,
+    "SURFACE_PRESSED": DARK_SURFACE_PRESSED,
+    "BORDER": DARK_BORDER,
+    "BORDER_STRONG": DARK_BORDER_STRONG,
+    "DIVIDER": DARK_DIVIDER,
+    "TEXT": DARK_TEXT,
+    "TEXT_STRONG": DARK_TEXT_STRONG,
+    "TEXT_SECONDARY": DARK_TEXT_SECONDARY,
+    "TEXT_MUTED": DARK_TEXT_MUTED,
+    "TEXT_FAINT": DARK_TEXT_FAINT,
+    "ACCENT": DARK_ACCENT,
+    "ACCENT_HOVER": DARK_ACCENT_HOVER,
+    "ACCENT_PRESSED": DARK_ACCENT_PRESSED,
+    "ACCENT_SOFT": DARK_ACCENT_SOFT,
+    "ACCENT_SOFT_BORDER": DARK_ACCENT_SOFT_BORDER,
+    "ACCENT_SOFT_TEXT": DARK_ACCENT_SOFT_TEXT,
+    "ACCENT_DISABLED": DARK_ACCENT_DISABLED,
+    "ACCENT_LIGHT": DARK_ACCENT_LIGHT,
+    "SUCCESS": DARK_SUCCESS,
+    "WARNING": DARK_WARNING,
+    "DANGER": DARK_DANGER,
+    "NEUTRAL": DARK_NEUTRAL,
+    "DANGER_SOFT": DARK_DANGER_SOFT,
+    "DANGER_SOFT_BORDER": DARK_DANGER_SOFT_BORDER,
+    # Glass RGB: dark glass over a dark backdrop. The same alpha gives a
+    # slightly heavier feel than light glass, which we tuned to match.
+    "GLASS_RGB": "30, 41, 59",
+    "CARD_ALPHA": DARK_CARD_ALPHA,
+    "SIDEBAR_ALPHA": DARK_SIDEBAR_ALPHA,
+    "HEADER_ALPHA": DARK_HEADER_ALPHA,
+    "HOVER_ALPHA": DARK_HOVER_ALPHA,
+    "PRESSED_ALPHA": DARK_PRESSED_ALPHA,
+    "GLASS_RIM": DARK_GLASS_RIM,
+    "GLASS_BORDER": DARK_GLASS_BORDER,
+    "INPUT_ALPHA": "0.55",
+    "BUTTON_ALPHA": "0.50",
+    "LIST_ALPHA": "0.55",
+    "CHECK_ALPHA": "0.55",
+    "GROOVE_ALPHA": "0.22",
+    "TRACK_ALPHA": "0.25",
+    "ITEM_HOVER_ALPHA": "0.30",
+    "FOOTER_RGB": "148, 163, 184",
+    "FOOTER_ALPHA": "0.18",
+    "PROGRESS_BG_RGB": "148, 163, 184",
+    "PROGRESS_BG_ALPHA": "0.14",
+    "CHECKBOX_BG_RGB": "30, 41, 59",
+    "CHECKBOX_BG_ALPHA": "0.55",
+    "BRAND_STOP_0": "#38BDF8",
+    "UI_FONT": UI_FONT,
+    "MONO_FONT": MONO_FONT,
+}
+
+
+def tokens_for(mode: str) -> dict:
+    """Return the token dict for ``mode`` ("light" or "dark")."""
+    return LIGHT_TOKENS if mode == "light" else DARK_TOKENS
+
+
+# --- The single QSS template; both palettes share this structure ---------
 _STYLESHEET_TEMPLATE = Template(
-    """
+    r"""
 /* ============================ base ============================ */
 /* No blanket "QWidget" rule: Qt auto-fills any styled widget that has no
    background with the palette window colour, which turned every label and
@@ -73,7 +257,7 @@ QWidget#contentArea {
 }
 
 QWidget#pageBody {
-    background-color: $BG_APP;
+    background-color: transparent;
 }
 
 QScrollArea {
@@ -104,16 +288,16 @@ QToolTip {
 
 /* ============================ sidebar ========================= */
 QFrame#sidebar {
-    background-color: $SURFACE;
+    background-color: rgba($GLASS_RGB, $SIDEBAR_ALPHA);
     border: none;
-    border-right: 1px solid $BORDER;
+    border-right: 1px solid $GLASS_BORDER;
 }
 
 QLabel#brandMark {
     background-color: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-        stop:0 #3B82F6, stop:1 $ACCENT_PRESSED);
+        stop:0 $BRAND_STOP_0, stop:1 $ACCENT_PRESSED);
     color: $SURFACE;
-    border-radius: 10px;
+    border-radius: 11px;
     font-size: 14px;
     font-weight: 700;
 }
@@ -149,7 +333,7 @@ QPushButton#navButton {
 }
 
 QPushButton#navButton:hover {
-    background-color: $SURFACE_HOVER;
+    background-color: rgba($GLASS_RGB, $HOVER_ALPHA);
     color: $TEXT_STRONG;
 }
 
@@ -161,8 +345,8 @@ QPushButton#navButton:checked {
 }
 
 QFrame#sidebarFooter {
-    background-color: $SURFACE_MUTED;
-    border: 1px solid $DIVIDER;
+    background-color: rgba($FOOTER_RGB, $FOOTER_ALPHA);
+    border: 1px solid $GLASS_BORDER;
     border-radius: 10px;
 }
 
@@ -173,8 +357,8 @@ QLabel#sidebarFooterText {
 
 /* ============================ header ========================== */
 QFrame#headerCard {
-    background-color: $SURFACE;
-    border: 1px solid $BORDER;
+    background-color: rgba($GLASS_RGB, $HEADER_ALPHA);
+    border: 1px solid $GLASS_BORDER;
     border-radius: 14px;
 }
 
@@ -201,8 +385,8 @@ QLabel#gpuInfoLabel {
 
 /* ============================ cards =========================== */
 QFrame#card {
-    background-color: $SURFACE;
-    border: 1px solid $BORDER;
+    background-color: rgba($GLASS_RGB, $CARD_ALPHA);
+    border: none;
     border-radius: 12px;
 }
 
@@ -218,7 +402,7 @@ QLabel#cardHint {
 }
 
 QFrame#cardDivider {
-    background-color: $DIVIDER;
+    background-color: $GLASS_BORDER;
     border: none;
 }
 
@@ -228,8 +412,8 @@ QComboBox,
 QSpinBox,
 QPlainTextEdit,
 QListWidget {
-    background-color: $SURFACE;
-    border: 1px solid $BORDER_STRONG;
+    background-color: rgba($GLASS_RGB, $INPUT_ALPHA);
+    border: 1px solid rgba($GLASS_RGB, 0.40);
     border-radius: 8px;
     padding: 6px 10px;
     color: $TEXT;
@@ -241,7 +425,7 @@ QLineEdit:hover,
 QComboBox:hover,
 QSpinBox:hover,
 QPlainTextEdit:hover {
-    border-color: #C3D0E1;
+    border: 1px solid rgba($ACCENT, 0.45);
 }
 
 QLineEdit:focus,
@@ -263,29 +447,75 @@ QListWidget:disabled {
 }
 
 QComboBox QAbstractItemView {
-    background-color: $SURFACE;
-    border: 1px solid $BORDER_STRONG;
-    border-radius: 8px;
+    background-color: rgba($GLASS_RGB, 0.96);
+    border: 1px solid rgba($GLASS_RGB, 0.55);
+    border-radius: 10px;
     padding: 4px;
     outline: none;
     selection-background-color: $ACCENT_SOFT;
     selection-color: $ACCENT_SOFT_TEXT;
 }
 
-/* Room for the hand-drawn chevron indicator from widgets.ChevronComboBox. */
 QComboBox {
     padding-right: 28px;
 }
 
+/* Hide the native drop-down button: ChevronComboBox draws its own arrow in
+   paintEvent. Without this rule the two arrows stack on top of each other. */
+QComboBox::drop-down {
+    subcontrol-origin: padding;
+    subcontrol-position: top right;
+    width: 0;
+    height: 0;
+    border: none;
+    background: transparent;
+}
+
+QComboBox::down-arrow {
+    image: none;
+    width: 0;
+    height: 0;
+}
+
+/* Hide the native step buttons entirely. PlusMinusSpinBox draws the
+   "+" and "−" glyphs and handles its own clicks in the right-hand
+   strip, so the QSS subcontrols would only cause confusion (wrong
+   half stepping the value, double click handling, etc.). */
+QSpinBox {
+    padding-right: 24px;
+}
+
+QSpinBox::up-button,
+QSpinBox::down-button {
+    subcontrol-origin: border;
+    width: 0;
+    height: 0;
+    border: none;
+    background: transparent;
+}
+
+QSpinBox::up-arrow,
+QSpinBox::down-arrow {
+    image: none;
+    width: 0;
+    height: 0;
+}
+
 QComboBox QAbstractItemView::item {
-    min-height: 26px;
-    padding: 2px 8px;
-    border-radius: 6px;
+    min-height: 30px;
+    padding: 4px 10px;
+    border-radius: 7px;
+    color: $TEXT_SECONDARY;
+}
+
+QComboBox QAbstractItemView::item:hover {
+    background-color: rgba($GLASS_RGB, $ITEM_HOVER_ALPHA);
+    color: $TEXT_STRONG;
 }
 
 /* ============================ buttons ========================= */
 QPushButton {
-    background-color: $SURFACE;
+    background-color: rgba($GLASS_RGB, $BUTTON_ALPHA);
     border: 1px solid $BORDER_STRONG;
     border-radius: 8px;
     padding: 7px 14px;
@@ -294,8 +524,8 @@ QPushButton {
 }
 
 QPushButton:hover {
-    background-color: $SURFACE_MUTED;
-    border-color: #C3D0E1;
+    background-color: $SURFACE_HOVER;
+    border-color: $ACCENT;
     color: $TEXT_STRONG;
 }
 
@@ -339,15 +569,15 @@ QPushButton#primaryButton:disabled {
 }
 
 QPushButton#softButton {
-    background-color: $SURFACE_HOVER;
-    border: 1px solid transparent;
+    background-color: rgba($GLASS_RGB, $BUTTON_ALPHA);
+    border: 1px solid $BORDER_STRONG;
     color: $TEXT_SECONDARY;
 }
 
 QPushButton#softButton:hover {
-    background-color: $SURFACE_PRESSED;
-    border-color: transparent;
+    background-color: $SURFACE_HOVER;
     color: $TEXT_STRONG;
+    border-color: $ACCENT;
 }
 
 QPushButton#ghostButton {
@@ -358,7 +588,7 @@ QPushButton#ghostButton {
 }
 
 QPushButton#ghostButton:hover {
-    background-color: $SURFACE_HOVER;
+    background-color: rgba($GLASS_RGB, $HOVER_ALPHA);
     border-color: transparent;
     color: $TEXT_STRONG;
 }
@@ -372,7 +602,7 @@ QPushButton#cancelButton:hover {
 /* Segmented control (the comparison mode switch): two buttons that read as one
    group, where the checked one is the active view. */
 QPushButton#segmentButton {
-    background-color: $SURFACE_MUTED;
+    background-color: transparent;
     border: 1px solid $BORDER;
     border-radius: 8px;
     padding: 5px 14px;
@@ -382,7 +612,7 @@ QPushButton#segmentButton {
 }
 
 QPushButton#segmentButton:hover {
-    background-color: $SURFACE_HOVER;
+    background-color: rgba($GLASS_RGB, $HOVER_ALPHA);
     border-color: $BORDER_STRONG;
     color: $TEXT_STRONG;
 }
@@ -406,7 +636,7 @@ QPushButton#cancelButton {
 
 /* ============================ progress ======================== */
 QProgressBar {
-    background-color: $SURFACE_PRESSED;
+    background-color: rgba($PROGRESS_BG_RGB, $PROGRESS_BG_ALPHA);
     border: none;
     border-radius: 5px;
     min-height: 10px;
@@ -426,7 +656,7 @@ QSlider {
 
 QSlider::groove:horizontal {
     height: 4px;
-    background: $SURFACE_PRESSED;
+    background: rgba(148, 163, 184, $TRACK_ALPHA);
     border-radius: 2px;
 }
 
@@ -436,7 +666,7 @@ QSlider::sub-page:horizontal {
 }
 
 QSlider::add-page:horizontal {
-    background: $SURFACE_PRESSED;
+    background: rgba(148, 163, 184, $TRACK_ALPHA);
     border-radius: 2px;
 }
 
@@ -474,7 +704,7 @@ QCheckBox::indicator {
     height: 18px;
     border: 1px solid $BORDER_STRONG;
     border-radius: 5px;
-    background-color: $SURFACE;
+    background-color: rgba($CHECKBOX_BG_RGB, $CHECKBOX_BG_ALPHA);
 }
 
 QCheckBox::indicator:hover {
@@ -504,7 +734,7 @@ QListWidget::item {
 }
 
 QListWidget::item:hover {
-    background-color: $SURFACE_MUTED;
+    background-color: rgba($GLASS_RGB, $ITEM_HOVER_ALPHA);
     color: $TEXT_STRONG;
 }
 
@@ -617,63 +847,88 @@ QScrollBar::sub-page:horizontal {
 """
 )
 
-APP_STYLESHEET = _STYLESHEET_TEMPLATE.substitute(
-    BG_APP=BG_APP,
-    SURFACE=SURFACE,
-    SURFACE_MUTED=SURFACE_MUTED,
-    SURFACE_HOVER=SURFACE_HOVER,
-    SURFACE_PRESSED=SURFACE_PRESSED,
-    BORDER=BORDER,
-    BORDER_STRONG=BORDER_STRONG,
-    DIVIDER=DIVIDER,
-    TEXT=TEXT,
-    TEXT_STRONG=TEXT_STRONG,
-    TEXT_SECONDARY=TEXT_SECONDARY,
-    TEXT_MUTED=TEXT_MUTED,
-    TEXT_FAINT=TEXT_FAINT,
-    ACCENT=ACCENT,
-    ACCENT_HOVER=ACCENT_HOVER,
-    ACCENT_PRESSED=ACCENT_PRESSED,
-    ACCENT_SOFT=ACCENT_SOFT,
-    ACCENT_SOFT_BORDER=ACCENT_SOFT_BORDER,
-    ACCENT_SOFT_TEXT=ACCENT_SOFT_TEXT,
-    ACCENT_DISABLED=ACCENT_DISABLED,
-    DANGER=DANGER,
-    DANGER_SOFT=DANGER_SOFT,
-    DANGER_SOFT_BORDER=DANGER_SOFT_BORDER,
-    NEUTRAL=NEUTRAL,
-    UI_FONT=UI_FONT,
-    MONO_FONT=MONO_FONT,
-)
+
+def build_stylesheet(mode: str = "light") -> str:
+    """Generate the QSS for the given mode ('light' / 'dark')."""
+    return _STYLESHEET_TEMPLATE.substitute(tokens_for(mode))
 
 
-def build_palette():
-    """Return a QPalette matching the design tokens.
+APP_STYLESHEET = build_stylesheet("light")
+DARK_APP_STYLESHEET = build_stylesheet("dark")
 
-    The stylesheet covers the shell itself; the palette keeps native surfaces
-    (message boxes, menus, tooltips) on the same light system.
+# --- Internal: last applied mode (used by widgets that paint themselves). -
+_CURRENT_MODE: str = "light"
+
+
+def current_mode() -> str:
+    """Return the last-resolved theme mode ("light" or "dark")."""
+    return _CURRENT_MODE
+
+
+def set_current_mode(mode: str) -> None:
+    """Update the cached mode without touching QApplication; useful for tests."""
+    global _CURRENT_MODE
+    if mode not in ("light", "dark"):
+        raise ValueError(f"unknown theme mode: {mode}")
+    _CURRENT_MODE = mode
+
+
+def _detect_system_mode() -> str:
+    """Best-effort detection of the OS dark-mode preference.
+
+    Falls back to "light" when PySide6 / Qt is unavailable (e.g. from a unit
+    test that imports this module before creating a QApplication).
     """
+    try:
+        from PySide6.QtCore import QCoreApplication, Qt  # noqa: WPS433
+    except Exception:
+        return "light"
+
+    app = QCoreApplication.instance()
+    if app is None:
+        return "light"
+    try:
+        scheme = app.styleHints().colorScheme()
+    except Exception:
+        return "light"
+    if scheme == Qt.ColorScheme.Dark:
+        return "dark"
+    if scheme == Qt.ColorScheme.Light:
+        return "light"
+    return "light"
+
+
+def resolve_mode(mode: str, resolved: Optional[str] = None) -> str:
+    """Collapse "system" to a concrete "light" / "dark"."""
+    if mode == "system":
+        return resolved if resolved in ("light", "dark") else _detect_system_mode()
+    return mode
+
+
+def build_palette(mode: str = "light"):
+    """Return a QPalette matching the design tokens for ``mode``."""
     from PySide6.QtGui import QColor, QPalette
 
+    tokens = tokens_for(mode)
     palette = QPalette()
-    palette.setColor(QPalette.ColorRole.Window, QColor(BG_APP))
-    palette.setColor(QPalette.ColorRole.WindowText, QColor(TEXT))
-    palette.setColor(QPalette.ColorRole.Base, QColor(SURFACE))
-    palette.setColor(QPalette.ColorRole.AlternateBase, QColor(SURFACE_MUTED))
-    palette.setColor(QPalette.ColorRole.Text, QColor(TEXT))
-    palette.setColor(QPalette.ColorRole.Button, QColor(SURFACE))
-    palette.setColor(QPalette.ColorRole.ButtonText, QColor(TEXT_SECONDARY))
-    palette.setColor(QPalette.ColorRole.BrightText, QColor(SURFACE))
-    palette.setColor(QPalette.ColorRole.Highlight, QColor(ACCENT))
-    palette.setColor(QPalette.ColorRole.HighlightedText, QColor(SURFACE))
-    palette.setColor(QPalette.ColorRole.ToolTipBase, QColor(TEXT_STRONG))
-    palette.setColor(QPalette.ColorRole.ToolTipText, QColor(SURFACE))
-    palette.setColor(QPalette.ColorRole.PlaceholderText, QColor(TEXT_FAINT))
-    palette.setColor(QPalette.ColorRole.Link, QColor(ACCENT))
-    palette.setColor(QPalette.ColorRole.Mid, QColor(BORDER_STRONG))
-    palette.setColor(QPalette.ColorRole.Midlight, QColor(DIVIDER))
-    palette.setColor(QPalette.ColorRole.Light, QColor(SURFACE))
-    palette.setColor(QPalette.ColorRole.Dark, QColor(BORDER_STRONG))
+    palette.setColor(QPalette.ColorRole.Window, QColor(tokens["BG_APP"]))
+    palette.setColor(QPalette.ColorRole.WindowText, QColor(tokens["TEXT"]))
+    palette.setColor(QPalette.ColorRole.Base, QColor(tokens["SURFACE"]))
+    palette.setColor(QPalette.ColorRole.AlternateBase, QColor(tokens["SURFACE_MUTED"]))
+    palette.setColor(QPalette.ColorRole.Text, QColor(tokens["TEXT"]))
+    palette.setColor(QPalette.ColorRole.Button, QColor(tokens["SURFACE"]))
+    palette.setColor(QPalette.ColorRole.ButtonText, QColor(tokens["TEXT_SECONDARY"]))
+    palette.setColor(QPalette.ColorRole.BrightText, QColor(tokens["SURFACE"]))
+    palette.setColor(QPalette.ColorRole.Highlight, QColor(tokens["ACCENT"]))
+    palette.setColor(QPalette.ColorRole.HighlightedText, QColor(tokens["SURFACE"]))
+    palette.setColor(QPalette.ColorRole.ToolTipBase, QColor(tokens["TEXT_STRONG"]))
+    palette.setColor(QPalette.ColorRole.ToolTipText, QColor(tokens["SURFACE"]))
+    palette.setColor(QPalette.ColorRole.PlaceholderText, QColor(tokens["TEXT_FAINT"]))
+    palette.setColor(QPalette.ColorRole.Link, QColor(tokens["ACCENT"]))
+    palette.setColor(QPalette.ColorRole.Mid, QColor(tokens["BORDER_STRONG"]))
+    palette.setColor(QPalette.ColorRole.Midlight, QColor(tokens["DIVIDER"]))
+    palette.setColor(QPalette.ColorRole.Light, QColor(tokens["SURFACE"]))
+    palette.setColor(QPalette.ColorRole.Dark, QColor(tokens["BORDER_STRONG"]))
 
     disabled = QPalette.ColorGroup.Disabled
     for role in (
@@ -681,18 +936,52 @@ def build_palette():
         QPalette.ColorRole.Text,
         QPalette.ColorRole.ButtonText,
     ):
-        palette.setColor(disabled, role, QColor(TEXT_FAINT))
-    palette.setColor(disabled, QPalette.ColorRole.Base, QColor(SURFACE_MUTED))
-    palette.setColor(disabled, QPalette.ColorRole.Button, QColor(SURFACE_MUTED))
-    palette.setColor(disabled, QPalette.ColorRole.Highlight, QColor(BORDER_STRONG))
+        palette.setColor(disabled, role, QColor(tokens["TEXT_FAINT"]))
+    palette.setColor(disabled, QPalette.ColorRole.Base, QColor(tokens["SURFACE_MUTED"]))
+    palette.setColor(disabled, QPalette.ColorRole.Button, QColor(tokens["SURFACE_MUTED"]))
+    palette.setColor(disabled, QPalette.ColorRole.Highlight, QColor(tokens["BORDER_STRONG"]))
     return palette
 
 
-def apply_app_theme(app) -> None:
-    """Apply the Fusion style, palette, UI font and stylesheet to an app."""
+def apply_app_theme(app, mode: str = "light", resolved: Optional[str] = None) -> str:
+    """Apply Fusion, palette, UI font and stylesheet to ``app``.
+
+    ``mode`` may be "system" (auto-detected), "light" or "dark". The resolved
+    mode is cached via :func:`current_mode` so widgets that paint themselves
+    (GlassFrame / GlassButton / GlassProgressBar / BackdropWidget) can pick
+    the matching token set. Returns the resolved mode.
+
+    Safe to call again at runtime: every live widget is re-polished, so a
+    theme switch takes effect on the spot instead of at the next restart.
+    """
     from PySide6.QtGui import QFont
 
+    concrete = resolve_mode(mode, resolved)
+    set_current_mode(concrete)
     app.setStyle("Fusion")
-    app.setPalette(build_palette())
+    app.setPalette(build_palette(concrete))
     app.setFont(QFont(UI_FONT_FAMILY, UI_FONT_POINT_SIZE))
-    app.setStyleSheet(APP_STYLESHEET)
+    app.setStyleSheet(build_stylesheet(concrete))
+    repolish(app)
+    return concrete
+
+
+def repolish(app) -> None:
+    """Force existing widgets to re-read the stylesheet immediately.
+
+    ``setStyleSheet`` alone re-polishes widgets lazily: ones that are not
+    currently visible, or that cache colours at paint time (the glass
+    widgets), can keep the previous theme until something else makes them
+    repaint. Walking the live widget list and re-polishing is what makes a
+    theme switch instant.
+    """
+    for widget in app.allWidgets():
+        if widget is None:
+            continue
+        style = widget.style()
+        style.unpolish(widget)
+        style.polish(widget)
+        widget.update()
+    for window in app.topLevelWidgets():
+        if window is not None:
+            window.update()
