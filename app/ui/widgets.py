@@ -28,6 +28,7 @@ from PySide6.QtCore import (
     QRectF,
     QTimer,
     Qt,
+    Signal,
 )
 from PySide6.QtGui import (
     QBrush,
@@ -44,6 +45,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
+    QLabel,
     QListWidget,
     QListWidgetItem,
     QProgressBar,
@@ -51,6 +53,7 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QStyledItemDelegate,
     QStyleOptionViewItem,
+    QVBoxLayout,
     QWidget,
 )
 
@@ -445,15 +448,18 @@ class GlassProgressBar(QProgressBar):
     #: Horizontal drift of the sheen, in px per tick.
     SHIMMER_SPEED = 0.9
 
-    #: Chunk colour families: a solid ``base`` with a brighter ``sheen`` band
-    #: sweeping across it. Kept to two colours so the sweep stays subtle —
-    #: a full base→bright→dark ramp reads as a colour glitch, not as flow.
-    STATE_COLORS: dict[str, dict[str, str]] = {
-        "normal": {"base": theme.ACCENT, "sheen": theme.ACCENT_LIGHT},
-        "success": {"base": theme.SUCCESS, "sheen": "#86EFAC"},
-        "warning": {"base": theme.WARNING, "sheen": "#FCD34D"},
-        "error": {"base": theme.DANGER, "sheen": "#FCA5A5"},
-        "cancelled": {"base": theme.NEUTRAL, "sheen": "#CBD5E1"},
+    #: Chunk colour families, keyed by state and resolved against the live
+    #: theme at paint time: a solid ``base`` with a brighter ``sheen`` band
+    #: sweeping across it. Kept to two colours per family so the sweep stays
+    #: subtle — a full base→bright→dark ramp reads as a colour glitch, not as
+    #: flow. ``sheen`` is fixed per family because it is a lighter tint of the
+    #: base, not a palette role.
+    STATE_TOKENS: dict[str, tuple[str, str]] = {
+        "normal": ("ACCENT", "ACCENT_LIGHT"),
+        "success": ("SUCCESS", "#86EFAC"),
+        "warning": ("WARNING", "#FCD34D"),
+        "error": ("DANGER", "#FCA5A5"),
+        "cancelled": ("NEUTRAL", "#CBD5E1"),
     }
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -470,7 +476,7 @@ class GlassProgressBar(QProgressBar):
     # Public API ------------------------------------------------------------
     def set_state(self, state: str) -> None:
         """Set the chunk colour family. Accepts: normal|success|warning|error|cancelled."""
-        if state not in self.STATE_COLORS:
+        if state not in self.STATE_TOKENS:
             raise ValueError(f"unknown progress-bar state: {state}")
         self._state = state
         # A successful run that is already at 100% gets the flash.
@@ -480,7 +486,9 @@ class GlassProgressBar(QProgressBar):
         self.update()
 
     def _chunk_palette(self) -> dict[str, str]:
-        return self.STATE_COLORS[self._state]
+        base_token, sheen = self.STATE_TOKENS[self._state]
+        tokens = theme.tokens_for(theme.current_mode())
+        return {"base": tokens[base_token], "sheen": sheen}
 
     def _animating(self) -> bool:
         """Whether the chunk is worth repainting 30 times a second.
@@ -698,7 +706,7 @@ class _StaggerItemDelegate(QStyledItemDelegate):
         if progress is None or progress >= 1.0:
             return
         rect = option.rect
-        accent = QColor(theme.ACCENT)
+        accent = QColor(theme.tokens_for(theme.current_mode())["ACCENT"])
         alpha = int(120 * (1.0 - progress))
         accent.setAlpha(max(0, min(255, alpha)))
         painter.save()
@@ -717,3 +725,149 @@ class _StaggerItemDelegate(QStyledItemDelegate):
             painter.drawRoundedRect(bar_rect, 2, 2)
         finally:
             painter.restore()
+
+
+# === ValidatableField =======================================================
+
+
+class ValidatableField(QFrame):
+    """A composable container that adds inline validation to its inner widget.
+
+    Wraps a child ``QLineEdit``/``QComboBox``/``QSpinBox``-style input so that
+    missing/invalid input drives an outline ``DANGER_SOFT_BORDER`` colour, an
+    inline error label below the widget, and a single ``invalid`` property
+    the form code can bind to.
+
+    Conventions (see memory *qframe-panel-bevel-and-painted-shadow*):
+
+    - This widget inherits ``QFrame`` so it must call ``setFrameShape(NoFrame)``
+      before any QSS — otherwise Fusion's panel bevel would re-appear.
+    - The outline colour is driven by widget-level QSS keyed on the
+      ``invalid`` dynamic property; the parent stylesheet stays unaware.
+    """
+
+    #: Emits the new invalid state whenever it flips. ``True`` means the
+    #: field is currently considered invalid (so a form-level "开始" button
+    #: can wire this to ``setEnabled``).
+    invalid_changed = Signal(bool)
+
+    #: Tokens that drive the inline QSS — looked up at apply time so a
+    #: runtime theme switch keeps the danger colour aligned with the rest of
+    #: the glass palette.
+    _DANGER_RIM_LIGHT = "DANGER_SOFT_BORDER"
+    _DANGER_RIM_DARK = "DANGER_SOFT_BORDER"
+    _ERROR_TEXT_LIGHT = "ACCENT_SOFT_TEXT"
+    _ERROR_TEXT_DARK = "DANGER_SOFT_BORDER"
+
+    def __init__(
+        self,
+        input_widget: QWidget,
+        helper_text: str = "",
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setObjectName("validatableField")
+        self._input = input_widget
+        self._invalid = False
+        self._error_text = ""
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(4)
+
+        outer.addWidget(input_widget)
+
+        self._helper_label = QLabel(self)
+        self._helper_label.setObjectName("fieldHelper")
+        self._helper_label.setWordWrap(True)
+        if helper_text:
+            self._helper_label.setText(helper_text)
+        else:
+            self._helper_label.hide()
+        outer.addWidget(self._helper_label)
+
+        self._refresh_style()
+
+    # ------------------------------------------------------------------ API
+    def input_widget(self) -> QWidget:
+        return self._input
+
+    def is_invalid(self) -> bool:
+        return self._invalid
+
+    def set_invalid(self, message: str) -> None:
+        self._error_text = message
+        self._helper_label.setText(message)
+        self._helper_label.show()
+        if not self._invalid:
+            self._invalid = True
+            self.setProperty("invalid", True)
+            self._refresh_style()
+            self.invalid_changed.emit(True)
+
+    def clear_invalid(self) -> None:
+        self._error_text = ""
+        self._helper_label.setText("")
+        self._helper_label.hide()
+        if self._invalid:
+            self._invalid = False
+            self.setProperty("invalid", False)
+            self._refresh_style()
+            self.invalid_changed.emit(False)
+
+    def refresh_style(self) -> None:
+        """Re-pick the danger colour from the current theme tokens."""
+        self._refresh_style()
+
+    # ------------------------------------------------------------------ paint
+    def paintEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        # Painted shadow underneath (memory convention, not QGraphicsEffect).
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        rect = self.rect().adjusted(2, 2, -2, 6)
+        if rect.width() <= 0 or rect.height() <= 0:
+            painter.end()
+            return
+        tokens = theme.tokens_for(theme.current_mode())
+        rim_token = (
+            self._DANGER_RIM_DARK
+            if theme.current_mode() == "dark"
+            else self._DANGER_RIM_LIGHT
+        )
+        rim_color = QColor(tokens[rim_token])
+        centre = QPoint(rect.x() + rect.width() // 2, rect.bottom() - 1)
+        radius = max(rect.width(), 60) * 0.55
+        gradient = QRadialGradient(centre, radius)
+        gradient.setColorAt(
+            0.0,
+            QColor(rim_color.red(), rim_color.green(), rim_color.blue(), 28),
+        )
+        gradient.setColorAt(
+            1.0,
+            QColor(rim_color.red(), rim_color.green(), rim_color.blue(), 0),
+        )
+        painter.fillRect(self.rect(), gradient)
+        painter.end()
+
+    # ------------------------------------------------------------------ internals
+    def _refresh_style(self) -> None:
+        tokens = theme.tokens_for(theme.current_mode())
+        text_token = (
+            self._ERROR_TEXT_DARK
+            if theme.current_mode() == "dark"
+            else self._ERROR_TEXT_LIGHT
+        )
+        error_colour = tokens[text_token]
+        helper_colour = tokens["TEXT_MUTED"]
+        qss = (
+            f"QLabel#fieldHelper {{"
+            f"  color: {error_colour if self._invalid else helper_colour};"
+            f"  background: transparent;"
+            f"  border: none;"
+            f"  font-size: 11px;"
+            f"  padding-left: 2px;"
+            f"}}"
+        )
+        self._helper_label.setStyleSheet(qss)
