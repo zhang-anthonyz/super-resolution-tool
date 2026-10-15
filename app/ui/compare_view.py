@@ -35,6 +35,7 @@ from PySide6.QtCore import QPointF, QRectF, QSize, QSizeF, Qt, QThread, Signal
 from PySide6.QtGui import (
     QColor,
     QFont,
+    QFontMetrics,
     QImage,
     QMouseEvent,
     QPainter,
@@ -54,6 +55,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from . import icons as icons_mod
 from . import theme
 
 #: Preview budget per image (QImage costs 3 bytes per pixel here).
@@ -256,6 +258,20 @@ class ComparisonView(QWidget):
         self._original_layer: Optional[QPixmap] = None
         self._layer_origin = QPointF(0.0, 0.0)
         self._layer_key = None
+
+    # ---- theme ---------------------------------------------------------------
+
+    def _token(self, name: str) -> QColor:
+        """Current theme colour for a token.
+
+        Everything this widget paints is drawn by hand (the canvas is not a
+        styled widget), so it has to read the live token set: with the light
+        constants the canvas stayed near-white after switching to dark.
+        """
+        return QColor(theme.tokens_for(theme.current_mode())[name])
+
+    def _crop_colour(self) -> QColor:
+        return self._token("SURFACE_MUTED")
 
     # ---- state ---------------------------------------------------------------
 
@@ -612,6 +628,11 @@ class ComparisonView(QWidget):
 
     # ---- painting ------------------------------------------------------------
 
+    def refresh_theme(self) -> None:
+        """Drop theme-derived caches and repaint (called on a theme switch)."""
+        self._invalidate_layers()
+        self.update()
+
     def _invalidate_layers(self) -> None:
         self._layer_key = None
         self._output_layer = None
@@ -643,6 +664,7 @@ class ComparisonView(QWidget):
             round(self._pan.x(), 2),
             round(self._pan.y(), 2),
             self._mode,
+            theme.current_mode(),
         )
         if self._pair is None or key == self._layer_key:
             return
@@ -669,7 +691,7 @@ class ComparisonView(QWidget):
             ("_original_layer", self._pair.original, original_source),
         ):
             pixmap = QPixmap(size)
-            pixmap.fill(QColor(theme.SURFACE_MUTED))
+            pixmap.fill(self._crop_colour())
             painter = QPainter(pixmap)
             painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
             painter.drawImage(QRectF(0, 0, size.width(), size.height()), image, region)
@@ -680,14 +702,9 @@ class ComparisonView(QWidget):
 
     def paintEvent(self, event) -> None:  # noqa: N802 - Qt naming
         painter = QPainter(self)
-        painter.fillRect(self.rect(), QColor(theme.SURFACE_MUTED))
+        painter.fillRect(self.rect(), self._crop_colour())
         if self._pair is None:
-            painter.setPen(QColor(theme.TEXT_SECONDARY))
-            painter.drawText(
-                self.rect(),
-                Qt.AlignmentFlag.AlignCenter,
-                "任务完成后这里显示原图与超分结果的对比预览",
-            )
+            self._paint_empty_state(painter)
             painter.end()
             return
 
@@ -697,6 +714,79 @@ class ComparisonView(QWidget):
         else:
             self._paint_lens(painter)
         painter.end()
+
+    def _paint_empty_state(self, painter: QPainter) -> None:
+        """Placeholder shown before any task has produced a pair.
+
+        An empty canvas is the first thing a new user sees, so it carries the
+        affordance (what will appear here) and the action that fills it instead
+        of a single line of grey text floating in a large blank area.
+        """
+        rect = self.rect()
+        if rect.width() < 220 or rect.height() < 150:
+            painter.setPen(self._token("TEXT_SECONDARY"))
+            painter.drawText(
+                rect,
+                Qt.AlignmentFlag.AlignCenter,
+                "任务完成后这里显示原图与超分结果的对比预览",
+            )
+            return
+
+        headline_font = QFont(painter.font())
+        headline_font.setPointSizeF(headline_font.pointSizeF() + 1.0)
+        headline_font.setBold(True)
+        hint_font = QFont(painter.font())
+        hint_font.setPointSizeF(max(8.0, hint_font.pointSizeF() - 1.0))
+
+        metrics = painter.fontMetrics()
+        hint_metrics = QFontMetrics(hint_font)
+        glyph_size = 46.0
+        headline = "尚无对比结果"
+        hint = "完成一次单张图片超分后自动载入；批量任务可在图片页逐张查看"
+
+        headline_h = float(metrics.height())
+        hint_h = float(hint_metrics.height())
+        block_h = glyph_size + 16.0 + headline_h + 6.0 + hint_h
+        top = rect.center().y() - block_h / 2.0
+
+        icons_mod.paint_glyph(
+            painter,
+            "compare",
+            QRectF(
+                rect.center().x() - glyph_size / 2.0,
+                top,
+                glyph_size,
+                glyph_size,
+            ),
+            self._token("TEXT_FAINT").name(),
+            stroke=1.4,
+        )
+
+        painter.setFont(headline_font)
+        painter.setPen(self._token("TEXT_SECONDARY"))
+        painter.drawText(
+            QRectF(
+                float(rect.left()),
+                top + glyph_size + 16.0,
+                float(rect.width()),
+                headline_h,
+            ),
+            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter,
+            headline,
+        )
+
+        painter.setFont(hint_font)
+        painter.setPen(self._token("TEXT_MUTED"))
+        painter.drawText(
+            QRectF(
+                float(rect.left()),
+                top + glyph_size + 16.0 + headline_h + 6.0,
+                float(rect.width()),
+                hint_h,
+            ),
+            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter,
+            hint,
+        )
 
     def _paint_slider(self, painter: QPainter) -> None:
         rect = self.image_rect()
@@ -719,7 +809,7 @@ class ComparisonView(QWidget):
             QPointF(split_x, self.view_rect().top()),
             QPointF(split_x, self.view_rect().bottom()),
         )
-        painter.setPen(QPen(QColor(theme.ACCENT), 1.5))
+        painter.setPen(QPen(self._token("ACCENT"), 1.5))
         painter.drawLine(
             QPointF(split_x, self.view_rect().top()),
             QPointF(split_x, self.view_rect().bottom()),
@@ -755,7 +845,7 @@ class ComparisonView(QWidget):
 
         # Marker on the image showing which pixels the lens is showing.
         marker = self.lens_marker_rect()
-        painter.setPen(QPen(QColor(theme.ACCENT), 1.5))
+        painter.setPen(QPen(self._token("ACCENT"), 1.5))
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawRect(marker)
 
@@ -769,10 +859,10 @@ class ComparisonView(QWidget):
             (output_rect, self._crop_output(block, target_size=output_rect.size()), "超分输出"),
         ):
             painter.drawPixmap(target.topLeft(), pixmap)
-            painter.setPen(QPen(QColor(theme.SURFACE), 2))
+            painter.setPen(QPen(self._token("SURFACE"), 2))
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawRect(target.adjusted(1.0, 1.0, -1.0, -1.0))
-            painter.setPen(QPen(QColor(theme.BORDER_STRONG), 1))
+            painter.setPen(QPen(self._token("BORDER_STRONG"), 1))
             painter.drawRect(target)
             self._draw_pill(
                 painter,
@@ -799,7 +889,7 @@ class ComparisonView(QWidget):
         rect = self.view_rect()
         center = QPointF(x, rect.center().y())
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(theme.ACCENT))
+        painter.setBrush(self._token("ACCENT"))
         painter.drawEllipse(center, 11.0, 11.0)
         painter.setPen(QPen(QColor("#ffffff"), 2))
         for offset in (-3.5, 3.5):
@@ -822,14 +912,13 @@ class ComparisonView(QWidget):
         source = source.intersected(QRectF(self._pair.original.rect()))
         return self._crop(self._pair.original, source, target_size)
 
-    @staticmethod
-    def _crop(image: QImage, region: QRectF, target_size) -> QPixmap:
+    def _crop(self, image: QImage, region: QRectF, target_size) -> QPixmap:
         target = QSize(
             max(1, int(round(target_size.width()))),
             max(1, int(round(target_size.height()))),
         )
         pixmap = QPixmap(target)
-        pixmap.fill(QColor(theme.SURFACE_MUTED))
+        pixmap.fill(self._crop_colour())
         if region.width() < 1 or region.height() < 1:
             return pixmap
         painter = QPainter(pixmap)
@@ -1142,11 +1231,19 @@ class ComparisonDialog(QDialog):
         return self.panel.view
 
 
-def ghost_button(text: str, slot, parent: Optional[QWidget] = None) -> QPushButton:
+def ghost_button(
+    text: str,
+    slot,
+    parent: Optional[QWidget] = None,
+    icon_name: Optional[str] = None,
+) -> QPushButton:
     """Secondary button matching the app's theme."""
     button = QPushButton(text, parent)
     button.setObjectName("ghostButton")
     button.setCursor(Qt.CursorShape.PointingHandCursor)
+    if icon_name:
+        button.setIcon(icons_mod.icon(icon_name, 15))
+        button.setIconSize(QSize(15, 15))
     button.clicked.connect(slot)
     return button
 
