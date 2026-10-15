@@ -6,6 +6,39 @@ from app.ui.theme import (
 )
 
 
+# --- contrast helpers -------------------------------------------------------
+
+#: Surfaces a text token can land on. The glass cards are translucent over a
+#: mesh-gradient backdrop, so ``#F2F6FD`` is the lightest composite the light
+#: theme can produce and every token has to stay readable on it; the dark
+#: equivalents are the card, the muted panel and the canvas.
+LIGHT_TEXT_SURFACES = ("#FFFFFF", "#F5F7FA", "#F2F6FD")
+DARK_TEXT_SURFACES = ("#1E293B", "#172033", "#0F172A")
+
+#: Roles that carry text the user has to read. TEXT_FAINT is deliberately not
+#: here: it is the disabled / placeholder / decorative tone, which WCAG exempts
+#: from contrast minimums.
+READABLE_TEXT_ROLES = ("TEXT", "TEXT_STRONG", "TEXT_SECONDARY", "TEXT_MUTED")
+
+AA_NORMAL = 4.5
+
+
+def _linear(channel: int) -> float:
+    value = channel / 255.0
+    return value / 12.92 if value <= 0.03928 else ((value + 0.055) / 1.055) ** 2.4
+
+
+def _luminance(colour: str) -> float:
+    hex_colour = colour.lstrip("#")
+    red, green, blue = (int(hex_colour[i : i + 2], 16) for i in (0, 2, 4))
+    return 0.2126 * _linear(red) + 0.7152 * _linear(green) + 0.0722 * _linear(blue)
+
+
+def contrast_ratio(foreground: str, background: str) -> float:
+    lighter, darker = sorted((_luminance(foreground), _luminance(background)), reverse=True)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
 def test_light_stylesheet_has_light_canvas_and_no_black():
     """The light variant is what tests + the default render path exercise.
 
@@ -53,3 +86,55 @@ def test_both_stylesheets_share_structure():
 def test_log_level_colors_are_semantic():
     assert set(LOG_LEVEL_COLORS) == {"Info", "Warning", "Error", "Success"}
     assert LOG_LEVEL_COLORS["Success"].startswith("#")
+
+
+def test_log_level_colors_have_a_dark_variant():
+    assert set(theme.DARK_LOG_LEVEL_COLORS) == set(LOG_LEVEL_COLORS)
+    assert theme.log_level_colors("light") is LOG_LEVEL_COLORS
+    assert theme.log_level_colors("dark") is theme.DARK_LOG_LEVEL_COLORS
+
+
+def test_readable_text_tokens_clear_wcag_aa_in_both_themes():
+    """Body and hint text must stay readable on every surface it can land on.
+
+    This is the regression net for the muted-grey drift the light theme had:
+    ``#7C8AA0`` on a white card measured 3.5:1, which is below AA for the
+    12px hints it was used for.
+    """
+    for mode, surfaces in (
+        ("light", LIGHT_TEXT_SURFACES),
+        ("dark", DARK_TEXT_SURFACES),
+    ):
+        tokens = theme.tokens_for(mode)
+        for role in READABLE_TEXT_ROLES:
+            for surface in surfaces:
+                ratio = contrast_ratio(tokens[role], surface)
+                assert ratio >= AA_NORMAL, (
+                    f"{mode} {role} {tokens[role]} on {surface} is "
+                    f"{ratio:.2f}:1, below WCAG AA ({AA_NORMAL}:1)"
+                )
+
+
+def test_log_level_and_status_colours_clear_wcag_aa():
+    """Level and status colours are painted as small text, not just as fills."""
+    for mode, panel in (
+        ("light", theme.SURFACE_MUTED),
+        ("dark", theme.DARK_SURFACE_MUTED),
+    ):
+        for level, colour in theme.log_level_colors(mode).items():
+            ratio = contrast_ratio(colour, panel)
+            assert ratio >= AA_NORMAL, (
+                f"{mode} log level {level} {colour} on {panel} is {ratio:.2f}:1"
+            )
+
+    for mode, surfaces in (
+        ("light", LIGHT_TEXT_SURFACES),
+        ("dark", DARK_TEXT_SURFACES),
+    ):
+        tokens = theme.tokens_for(mode)
+        for role in ("SUCCESS", "WARNING", "DANGER", "ACCENT", "ACCENT_SOFT_TEXT"):
+            for surface in surfaces:
+                ratio = contrast_ratio(tokens[role], surface)
+                assert ratio >= AA_NORMAL, (
+                    f"{mode} {role} {tokens[role]} on {surface} is {ratio:.2f}:1"
+                )
