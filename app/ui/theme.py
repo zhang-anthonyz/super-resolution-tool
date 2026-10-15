@@ -37,7 +37,13 @@ DIVIDER = "#EEF2F8"
 TEXT = "#1F2937"
 TEXT_STRONG = "#1E293B"
 TEXT_SECONDARY = "#4B5C72"
-TEXT_MUTED = "#7C8AA0"
+#: Quiet-but-readable text: hints, captions, secondary metadata. Every variant
+#: clears WCAG AA (4.5:1) against the surfaces it is drawn on — the glass card
+#: is translucent, so the test uses the lightest backdrop the mesh produces.
+TEXT_MUTED = "#526078"
+#: Disabled labels, input placeholders and decorative glyphs. Deliberately below
+#: AA: WCAG exempts inactive controls, and a greyed-out control has to look
+#: greyed out. Never use it for text the user must read.
 TEXT_FAINT = "#9AA7BA"
 
 ACCENT = "#2563EB"
@@ -50,9 +56,11 @@ ACCENT_DISABLED = "#B9CDF6"
 #: Highlight color of the gradient that flows across the progress-bar chunk.
 ACCENT_LIGHT = "#60A5FA"
 
-SUCCESS = "#16A34A"
-WARNING = "#D97706"
-DANGER = "#DC2626"
+#: Status colours, also used as small text (toast glyphs, inline status), so the
+#: light set is the darker end of each hue rather than the vivid mid-tone.
+SUCCESS = "#15803D"
+WARNING = "#B45309"
+DANGER = "#C81E1E"
 NEUTRAL = "#94A3B8"
 DANGER_SOFT = "#FEF2F2"
 DANGER_SOFT_BORDER = "#FCA5A5"
@@ -116,13 +124,27 @@ UI_FONT_FAMILY = "Segoe UI Variable Text"
 UI_FONT_POINT_SIZE = 10
 MONO_FONT = '"Cascadia Mono", "Consolas", "Microsoft YaHei UI"'
 
-#: Log level colours are semantic status cues, not decoration.
+#: Log level colours are semantic status cues, not decoration. Each variant is
+#: tuned for the surface it is read on (light: near-white log panel, dark:
+#: ``DARK_SURFACE_MUTED``) and clears WCAG AA (4.5:1) against it.
 LOG_LEVEL_COLORS = {
     "Info": "#475569",
     "Warning": "#B45309",
     "Error": "#B91C1C",
     "Success": "#15803D",
 }
+
+DARK_LOG_LEVEL_COLORS = {
+    "Info": "#94A3B8",
+    "Warning": "#FBBF24",
+    "Error": "#F87171",
+    "Success": "#4ADE80",
+}
+
+
+def log_level_colors(mode: str) -> dict[str, str]:
+    """Log level colours for ``mode`` ("light" / "dark")."""
+    return DARK_LOG_LEVEL_COLORS if mode == "dark" else LOG_LEVEL_COLORS
 
 # --- Token aggregates ------------------------------------------------------
 LIGHT_TOKENS = {
@@ -309,12 +331,12 @@ QLabel#brandTitle {
 }
 
 QLabel#brandSubtitle {
-    color: $TEXT_FAINT;
+    color: $TEXT_MUTED;
     font-size: 11px;
 }
 
 QLabel#navSection {
-    color: $TEXT_FAINT;
+    color: $TEXT_MUTED;
     font-size: 11px;
     font-weight: 600;
     padding: 2px 6px;
@@ -342,6 +364,22 @@ QPushButton#navButton:checked {
     border-left: 3px solid $ACCENT;
     color: $ACCENT_SOFT_TEXT;
     font-weight: 600;
+}
+
+/* Keyboard focus: the nav rail is reachable with Tab, and the checked state
+   alone does not tell the user which row the focus is on. The bar is the pale
+   accent so a focused-but-unselected row cannot be mistaken for the current
+   page, which owns the solid one. */
+QPushButton#navButton:focus {
+    background-color: $SURFACE_HOVER;
+    border-left: 3px solid $ACCENT_SOFT_BORDER;
+    color: $TEXT_STRONG;
+}
+
+QPushButton#navButton:checked:focus {
+    background-color: $ACCENT_SOFT;
+    border-left: 3px solid $ACCENT;
+    color: $ACCENT_SOFT_TEXT;
 }
 
 QFrame#sidebarFooter {
@@ -397,7 +435,7 @@ QLabel#cardTitle {
 }
 
 QLabel#cardHint {
-    color: $TEXT_FAINT;
+    color: $TEXT_MUTED;
     font-size: 11px;
 }
 
@@ -743,6 +781,19 @@ QListWidget::item:selected {
     color: $ACCENT_SOFT_TEXT;
 }
 
+/* Settings-page nav rail — denser than the global list style because the
+   rail is meant to scan quickly rather than display rich rows. */
+QListWidget#settingsNav {
+    background: transparent;
+    border: 1px solid $BORDER;
+    border-radius: 10px;
+    padding: 6px;
+}
+QListWidget#settingsNav::item {
+    padding: 9px 12px;
+    font-weight: 600;
+}
+
 /* ============================ labels ========================== */
 QLabel {
     background: transparent;
@@ -778,6 +829,26 @@ QLabel#mutedLabel {
 QLabel#statusLabel {
     color: $TEXT_SECONDARY;
     font-size: 12px;
+}
+
+QLabel#videoMetaLabel {
+    font-size: 12px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    border: 1px solid $BORDER;
+    background: rgba(0, 0, 0, 0);
+}
+QLabel#videoMetaLabel[state="placeholder"] {
+    color: $TEXT_MUTED;
+}
+QLabel#videoMetaLabel[state="ok"] {
+    color: $TEXT;
+    border-color: $ACCENT_SOFT_BORDER;
+    background: $ACCENT_SOFT;
+}
+QLabel#videoMetaLabel[state="danger"] {
+    color: $ACCENT_SOFT_TEXT;
+    border-color: $DANGER_SOFT_BORDER;
 }
 
 QLabel#logTitle {
