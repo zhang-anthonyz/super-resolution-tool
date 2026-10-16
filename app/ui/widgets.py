@@ -1,15 +1,18 @@
 """Custom widgets for the desktop shell.
 
-Three classes replace the styled defaults so the user gets the
-"liquid glass" feel end-to-end:
+The "liquid glass" surface has been replaced with a precision-instrument
+aesthetic ("STUDIO"):
 
 * :class:`BackdropWidget` replaces the flat ``QWidget#appRoot``. It paints a
-  soft mesh-gradient backdrop under every surface — cards and sidebar then sit
-  on it as translucent glass.
-* :class:`GlassFrame` and :class:`GlassButton` are the card and the interactive
-  surface. They paint a faint rim highlight that follows the cursor (card) or
-  a click ripple (button).
-* :class:`GlassProgressBar` self-paints a flowing multi-stop chunk.
+  deep charcoal canvas overlaid with a 1px engineering grid + a faint film
+  grain — the texture under every card.
+* :class:`HairlineFrame` (was ``GlassFrame``) is the card. A 1px border and a
+  single inner top highlight read as a precision-engineered surface instead
+  of frosted glass.
+* :class:`RippleButton` (was ``GlassButton``) keeps the click ripple but the
+  chrome is hairline-bordered and the press fades the entire button.
+* :class:`HairlineProgressBar` (was ``GlassProgressBar``) self-paints a thin
+  chunk with a refined shimmer and a 100% celebration.
 * :class:`StaggerAnimator` and :func:`stagger_list_items` are pure helpers for
   fade-in + translateY animations on a ``QListWidget``.
 
@@ -19,6 +22,7 @@ The :class:`ChevronComboBox` keeps its job: re-painting the missing
 from __future__ import annotations
 
 import math
+import random
 from typing import Iterable
 
 from PySide6.QtCore import (
@@ -33,7 +37,7 @@ from PySide6.QtCore import (
 from PySide6.QtGui import (
     QBrush,
     QColor,
-    QGradient,
+    QFontMetricsF,
     QLinearGradient,
     QPainter,
     QPainterPath,
@@ -61,7 +65,7 @@ from . import theme
 
 
 #: Horizontal distance from the right edge to the chevron centre.
-CHEVRON_INSET = 17
+CHEVRON_INSET = 16
 
 
 # === ChevronComboBox (unchanged) ============================================
@@ -96,7 +100,7 @@ class ChevronComboBox(QComboBox):
                 color = QColor(tokens["ACCENT"])
             else:
                 color = QColor(tokens["TEXT_SECONDARY"])
-        pen = QPen(color, 1.8)
+        pen = QPen(color, 1.4)
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
         painter.setPen(pen)
@@ -105,9 +109,9 @@ class ChevronComboBox(QComboBox):
         center_y = self.height() / 2.0
         chevron = QPolygonF(
             [
-                QPointF(center_x - 4.5, center_y - 2.4),
-                QPointF(center_x, center_y + 2.8),
-                QPointF(center_x + 4.5, center_y - 2.4),
+                QPointF(center_x - 4.0, center_y - 2.0),
+                QPointF(center_x, center_y + 2.4),
+                QPointF(center_x + 4.0, center_y - 2.0),
             ]
         )
         painter.drawPolyline(chevron)
@@ -134,10 +138,6 @@ class PlusMinusSpinBox(QSpinBox):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        # The native step buttons still exist; we want them hidden so the
-        # user can't accidentally click them and step in the wrong direction.
-        # The QSS handles that with ``QSpinBox::up-button,
-        # QSpinBox::down-button { width: 0 }`` and matching the arrows.
         self.setMouseTracking(True)
 
     def mousePressEvent(self, event) -> None:  # noqa: N802
@@ -152,8 +152,6 @@ class PlusMinusSpinBox(QSpinBox):
                 self.stepDown()
             event.accept()
             return
-        # Outside the button strip: let the QSpinBox line-edit behaviour
-        # run as normal (focus, cursor placement, etc.).
         super().mousePressEvent(event)
 
     def _is_in_button_area(self, point) -> bool:
@@ -167,11 +165,7 @@ class PlusMinusSpinBox(QSpinBox):
         self._paint_glyphs()
 
     def _paint_glyphs(self) -> None:
-        """Draw a "+" in the up half and a "−" in the down half.
-
-        Both glyphs live entirely within the right-hand button strip,
-        so they can never spill into the line-edit area.
-        """
+        """Draw a "+" in the up half and a "−" in the down half."""
         painter = QPainter(self)
         try:
             painter.setClipping(False)
@@ -183,9 +177,9 @@ class PlusMinusSpinBox(QSpinBox):
                 color = QColor(tokens["TEXT_SECONDARY"])
 
             cx = self.width() - self.BUTTON_WIDTH / 2
-            r = 5.0
+            r = 4.0
             painter.setPen(
-                QPen(color, 1.6, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
+                QPen(color, 1.4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
             )
 
             up_cy = self.height() * 0.25
@@ -200,139 +194,181 @@ class PlusMinusSpinBox(QSpinBox):
 
 
 # === BackdropWidget ========================================================
-#: Coloured blobs painted as radial gradients under the rest of the window.
-#: Low chroma and wide falloff so they read as depth, not as wallpaper.
-#: Each entry is (colour, centre x, centre y, radius) as fractions.
-_LIGHT_BLOBS = (
-    ("#DBEAFE", 0.12, 0.06, 0.75),   # blue wash, top-left
-    ("#EDE9FE", 0.95, 0.92, 0.70),   # violet wash, bottom-right
-    ("#CCFBF1", 0.58, 0.14, 0.55),   # faint cyan, top-middle
-    ("#EFF6FF", 0.50, 0.60, 0.90),   # broad centre lift
-)
-_DARK_BLOBS = (
-    ("#1E3A8A", 0.12, 0.06, 0.78),   # deep blue, top-left
-    ("#312E81", 0.95, 0.92, 0.72),   # indigo, bottom-right
-    ("#0E7490", 0.58, 0.14, 0.55),   # teal, top-middle
-    ("#111C33", 0.50, 0.60, 0.90),   # broad centre lift
-)
+#: Engineering grid: 24px square cells, drawn as 1px hairlines. The grid
+#: stays *just* above the canvas so it reads as "instrumentation", not
+#: "graph paper". Slight per-cell pixel offset keeps the grid from forming
+#: moiré with the device pixel ratio at 1.0.
+_GRID_PX = 24
+_GRID_ALPHA_LIGHT = 22
+_GRID_ALPHA_DARK = 26
 
-#: Blob alpha: enough to tint the canvas, far from a hard edge.
-_BLOB_ALPHA_LIGHT = 0.55
-_BLOB_ALPHA_DARK = 0.62
+#: Film-grain noise — pre-baked into a small tile so painting it stays cheap.
+#: The tile is rebuilt on theme switch (alpha changes) and kept otherwise.
+_GRAIN_TILE_PX = 192
+_GRAIN_DENSITY = 0.05
+
+
+def _build_grain_tile(mode: str) -> QPixmap:
+    """Bake a small greyscale-noise tile once and stamp it across the canvas."""
+    tokens = theme.tokens_for(mode)
+    r, g, b = (int(part) for part in tokens["GRAIN_RGB"].split(","))
+    alpha = float(tokens["GRAIN_ALPHA"])
+    tile = QPixmap(_GRAIN_TILE_PX, _GRAIN_TILE_PX)
+    tile.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(tile)
+    try:
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        rng = random.Random(0x535455)  # deterministic per process
+        for y in range(_GRAIN_TILE_PX):
+            for x in range(_GRAIN_TILE_PX):
+                if rng.random() > _GRAIN_DENSITY:
+                    continue
+                speck = QColor(r, g, b)
+                speck.setAlphaF(alpha)
+                painter.fillRect(x, y, 1, 1, speck)
+    finally:
+        painter.end()
+    return tile
 
 
 class BackdropWidget(QWidget):
-    """Root widget painting a soft mesh-gradient backdrop.
+    """Root widget painting a deep canvas with a 1px grid + film grain.
 
-    Sits behind every child (sidebar, header, cards). The mesh is rendered
-    once into a pixmap and blitted afterwards — the gradient would otherwise
-    cost four full-window fills on every repaint of the root widget.
-
-    Deliberately *static*: an earlier version drifted the blobs a few pixels
-    on a timer, which read as a jump-cut rather than motion.
+    The mesh-gradient backdrop is gone: it read as wallpaper, not as a working
+    surface. The replacement is two cheap static layers — a 24px engineering
+    grid and a procedural noise tile — that read as "instrument bezel" without
+    distracting from the cards on top. Both layers are cached so a repaint
+    does not cost a full re-render.
     """
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("appRoot")
-        # Every pixel is painted (base fill + blobs cover the whole rect), so
-        # Qt can skip its own background erase.
         self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
         self._cache: QPixmap | None = None
-        self._cache_key: tuple[int, int, int, str] | None = None
+        self._cache_key: tuple[int, int, str] | None = None
+        self._grain_tile: QPixmap | None = None
+        self._grain_tile_mode: str | None = None
 
     def invalidate(self) -> None:
-        """Drop the cached mesh (call after a theme change)."""
+        """Drop the cached backdrop (call after a theme change)."""
         self._cache = None
         self._cache_key = None
+        self._grain_tile = None
+        self._grain_tile_mode = None
         self.update()
 
-    def _blobs(self) -> tuple[tuple[str, float, float, float], ...]:
-        return _DARK_BLOBS if theme.current_mode() == "dark" else _LIGHT_BLOBS
-
-    def _base_color(self) -> QColor:
-        return QColor(theme.tokens_for(theme.current_mode())["BG_APP"])
+    def _grain_for_mode(self) -> QPixmap:
+        mode = theme.current_mode()
+        if self._grain_tile is None or self._grain_tile_mode != mode:
+            self._grain_tile = _build_grain_tile(mode)
+            self._grain_tile_mode = mode
+        return self._grain_tile
 
     def paintEvent(self, event) -> None:  # noqa: N802 - Qt naming
         ratio = self.devicePixelRatioF()
-        key = (self.width(), self.height(), round(ratio * 100), theme.current_mode())
+        key = (self.width(), self.height(), theme.current_mode())
         if self._cache is None or self._cache_key != key:
-            self._cache = self._render_mesh(ratio)
+            self._cache = self._render_canvas(ratio)
             self._cache_key = key
         painter = QPainter(self)
         painter.drawPixmap(0, 0, self._cache)
         painter.end()
         super().paintEvent(event)
 
-    def _render_mesh(self, ratio: float) -> QPixmap:
+    def _render_canvas(self, ratio: float) -> QPixmap:
         pixmap = QPixmap(
             max(1, int(self.width() * ratio)), max(1, int(self.height() * ratio))
         )
         pixmap.setDevicePixelRatio(ratio)
-        pixmap.fill(self._base_color())
+        # Base fill — the BG_APP token.
+        tokens = theme.tokens_for(theme.current_mode())
+        pixmap.fill(QColor(tokens["BG_APP"]))
 
         painter = QPainter(pixmap)
         try:
-            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-            painter.setPen(Qt.PenStyle.NoPen)
-            rect = QRectF(0.0, 0.0, float(self.width()), float(self.height()))
-            alpha = (
-                _BLOB_ALPHA_DARK if theme.current_mode() == "dark"
-                else _BLOB_ALPHA_LIGHT
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+
+            # 1px engineering grid. Drawn straight onto the pixmap at full
+            # resolution; the alpha is set in stone so it never washes out
+            # the BG colour.
+            grid = QColor(tokens["GRID_RGB"])
+            grid_alpha = (
+                _GRID_ALPHA_DARK if theme.current_mode() == "dark"
+                else _GRID_ALPHA_LIGHT
             )
-            for color, x_share, y_share, radius_share in self._blobs():
-                centre = QPointF(rect.width() * x_share, rect.height() * y_share)
-                radius = max(rect.width(), rect.height()) * radius_share
-                gradient = QRadialGradient(centre, radius)
-                inner = QColor(color)
-                inner.setAlphaF(alpha)
-                middle = QColor(color)
-                middle.setAlphaF(alpha * 0.45)
-                gradient.setColorAt(0.0, inner)
-                gradient.setColorAt(0.55, middle)
-                gradient.setColorAt(1.0, QColor(0, 0, 0, 0))
-                painter.fillRect(rect, QBrush(gradient))
+            grid.setAlpha(grid_alpha)
+            painter.setPen(QPen(grid, 1.0 / ratio))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            width = self.width()
+            height = self.height()
+            for x in range(_GRID_PX, width, _GRID_PX):
+                painter.drawLine(QPointF(x, 0.0), QPointF(x, float(height)))
+            for y in range(_GRID_PX, height, _GRID_PX):
+                painter.drawLine(QPointF(0.0, y), QPointF(float(width), y))
+
+            # Film grain — stamped across the canvas. Qt handles tiled draws
+            # natively so this stays under a frame even on 4K displays.
+            grain = self._grain_for_mode()
+            painter.drawTiledPixmap(0, 0, width, height, grain)
         finally:
             painter.end()
         return pixmap
 
 
-# === GlassFrame ============================================================
+# === HairlineFrame =========================================================
 
 
-class GlassFrame(QFrame):
-    """A translucent card surface, identical in look to ``LogPanel``.
+class HairlineFrame(QFrame):
+    """A precise card surface — 1px border + 1px inner top highlight.
 
-    No custom painting: the body is filled by the QSS
-    ``QFrame#card { background-color: rgba($GLASS_RGB, $CARD_ALPHA);
-    border-radius: 12px }`` rule. The inner rim is the only paint added,
-    and it's a 1px white line along the rounded edge — the same
-    highlight that :class:`LogPanel` gets from the QSS alone.
+    The QSS handles the background + border colour; this widget adds the
+    inner highlight (a 1px line along the top edge) that turns a flat
+    rectangle into a "panel".
 
     ``setFrameShape(NoFrame)`` is still required: Qt Fusion's default
     :class:`QFrame` paints a panel bevel otherwise, and the QSS
-    translucent fill is drawn underneath it. The bevel is what was
-    showing up as a "black border" in the user's screenshots.
+    translucent fill is drawn underneath it.
     """
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        # Hard-disable the QFrame panel bevel — the source of the visible
-        # black border in the Fusion style.
         self.setFrameShape(QFrame.Shape.NoFrame)
 
+    def paintEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        super().paintEvent(event)
+        painter = QPainter(self)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            tokens = theme.tokens_for(theme.current_mode())
+            # 1px inner top highlight — slightly lighter than the border.
+            rim = QColor(tokens["BORDER_STRONG"])
+            rim.setAlpha(140 if theme.current_mode() == "dark" else 120)
+            pen = QPen(rim, 1.0)
+            painter.setPen(pen)
+            painter.drawLine(
+                QPointF(1.0, 0.6), QPointF(self.width() - 1.0, 0.6)
+            )
+        finally:
+            painter.end()
 
-# === GlassButton ===========================================================
+
+#: Public alias for callers that still import the old name. Keeps any
+#: test or external import working without a sweeping rename.
+GlassFrame = HairlineFrame
 
 
-class GlassButton(QPushButton):
+# === RippleButton ==========================================================
+
+
+class RippleButton(QPushButton):
     """A ``QPushButton`` that paints a click ripple over the stylesheet.
 
-    All chrome, hover, and pressed visuals stay in the QSS so restyling keeps
-    working; the ripple is purely additive and lives 300ms.
+    The chrome stays in the QSS so a theme switch repaints correctly; the
+    ripple is purely additive and lives 280ms.
     """
 
-    RIPPLE_MS = 300
+    RIPPLE_MS = 280
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -351,7 +387,6 @@ class GlassButton(QPushButton):
         super().mousePressEvent(event)
 
     def _elapsed_ms(self) -> int:
-        # ``time.monotonic`` in milliseconds is plenty for a 300ms window.
         import time
 
         return int(time.monotonic() * 1000)
@@ -366,8 +401,6 @@ class GlassButton(QPushButton):
             self._timer.stop()
             self.update()
             return
-        # Repaint only the ring's bounding box, not the whole button: a full
-        # repaint per frame is what made the press feel heavy.
         self.update(self._ripple_bounds())
 
     def _ripple_bounds(self) -> QRect:
@@ -381,18 +414,18 @@ class GlassButton(QPushButton):
         )
 
     def _ripple_radius(self, progress: float) -> float:
-        # Ease-out expansion: fast at first, settling as it fades.
         reach = math.hypot(self.width(), self.height()) * 1.05
         return max(1.0, reach * (1 - (1 - progress) ** 2.4))
 
     def _ripple_color(self) -> QColor:
-        # On the saturated primary a white flash; on the pale glass buttons a
+        # On the saturated primary a white flash; on the hairline buttons a
         # tinted one, because white on white is invisible.
         if self.objectName() == "primaryButton":
-            return QColor(255, 255, 255, 150)
+            return QColor(255, 255, 255, 140)
+        tokens = theme.tokens_for(theme.current_mode())
         if theme.current_mode() == "dark":
-            return QColor(96, 165, 250, 92)
-        return QColor(37, 99, 235, 58)
+            return QColor(94, 234, 212, 96)
+        return QColor(14, 143, 110, 60)
 
     def paintEvent(self, event) -> None:  # noqa: N802
         super().paintEvent(event)
@@ -420,23 +453,28 @@ class GlassButton(QPushButton):
         try:
             painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
             painter.setPen(Qt.PenStyle.NoPen)
-            # Clipped to the button's own rounded shape.
             path = QPainterPath()
-            path.addRoundedRect(QRectF(self.rect()), 8.0, 8.0)
+            path.addRoundedRect(
+                QRectF(self.rect()), 6.0, 6.0
+            )
             painter.fillPath(path, QBrush(gradient))
         finally:
             painter.end()
 
 
-# === GlassProgressBar ======================================================
+#: Public alias for callers that still import the old name.
+GlassButton = RippleButton
 
 
-class GlassProgressBar(QProgressBar):
-    """Progress bar with a flowing multi-stop chunk and a 100% celebration.
+# === HairlineProgressBar ===================================================
+
+
+class HairlineProgressBar(QProgressBar):
+    """Progress bar with a flowing sheen chunk and a 100% celebration.
 
     The default ``QProgressBar::chunk`` style can only animate by changing
     geometry; replacing it with a custom paint allows a gradient that *flows*
-    across the chunk at ~60fps and a brief colour pulse at completion.
+    across the chunk at ~60fps and a brief lift on completion.
 
     The animation timer is on only while the bar is actually moving (or
     celebrating) — once the task is done, or before it starts, the chunk is
@@ -450,16 +488,13 @@ class GlassProgressBar(QProgressBar):
 
     #: Chunk colour families, keyed by state and resolved against the live
     #: theme at paint time: a solid ``base`` with a brighter ``sheen`` band
-    #: sweeping across it. Kept to two colours per family so the sweep stays
-    #: subtle — a full base→bright→dark ramp reads as a colour glitch, not as
-    #: flow. ``sheen`` is fixed per family because it is a lighter tint of the
-    #: base, not a palette role.
+    #: sweeping across it.
     STATE_TOKENS: dict[str, tuple[str, str]] = {
         "normal": ("ACCENT", "ACCENT_LIGHT"),
         "success": ("SUCCESS", "#86EFAC"),
         "warning": ("WARNING", "#FCD34D"),
         "error": ("DANGER", "#FCA5A5"),
-        "cancelled": ("NEUTRAL", "#CBD5E1"),
+        "cancelled": ("NEUTRAL", "#A8B0BA"),
     }
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -491,11 +526,7 @@ class GlassProgressBar(QProgressBar):
         return {"base": tokens[base_token], "sheen": sheen}
 
     def _animating(self) -> bool:
-        """Whether the chunk is worth repainting 30 times a second.
-
-        At rest (0%, or finished) the gradient is static, so the timer stays
-        off — otherwise both bars would repaint forever at an idle desktop.
-        """
+        """Whether the chunk is worth repainting 30 times a second."""
         return self.minimum() < self.value() < self.maximum() or self._pulse_active
 
     def _sync_animation(self) -> None:
@@ -546,10 +577,8 @@ class GlassProgressBar(QProgressBar):
         radius = rect.height() / 2.0
         path = QPainterPath()
         path.addRoundedRect(rect, radius, radius)
-        if theme.current_mode() == "dark":
-            painter.fillPath(path, QColor(148, 163, 184, 36))
-        else:
-            painter.fillPath(path, QColor(148, 163, 184, 60))
+        tokens = theme.tokens_for(theme.current_mode())
+        painter.fillPath(path, QColor(tokens["DIVIDER"]))
 
     #: Width of one sheen band, in px. Fixed rather than proportional to the
     #: chunk so the sweep keeps the same visual speed at every progress level.
@@ -577,16 +606,13 @@ class GlassProgressBar(QProgressBar):
         sheen = QColor(palette["sheen"])
 
         if self._animating():
-            # A bright band travelling left→right over a solid fill. The
-            # gradient repeats with a period of SHEEN_PERIOD and the first and
-            # last stops are the same colour, so the wrap is invisible — an
-            # earlier version slid a 3-stop ramp, which jumped once per cycle.
             phase = (self._phase * self.SHIMMER_SPEED) % self.SHEEN_PERIOD
             gradient = QLinearGradient(
                 QPointF(chunk_rect.x() + phase - self.SHEEN_PERIOD,
                         chunk_rect.center().y()),
                 QPointF(chunk_rect.x() + phase, chunk_rect.center().y()),
             )
+            from PySide6.QtGui import QGradient
             gradient.setSpread(QGradient.Spread.RepeatSpread)
             gradient.setColorAt(0.0, base)
             gradient.setColorAt(0.5, sheen)
@@ -596,10 +622,13 @@ class GlassProgressBar(QProgressBar):
             painter.fillPath(chunk_path, base)
 
         if self._pulse_active:
-            # Completion flash: a brief lift on the finished chunk.
             flash = QColor(255, 255, 255)
             flash.setAlpha(max(0, int(96 * (1.0 - self._pulse_phase))))
             painter.fillPath(chunk_path, flash)
+
+
+#: Public alias for callers that still import the old name.
+GlassProgressBar = HairlineProgressBar
 
 
 # === StaggerAnimator =======================================================
@@ -609,18 +638,10 @@ def stagger_list_items(
     list_widget: QListWidget,
     item_indices: Iterable[int],
     *,
-    delay_ms: int = 35,
-    duration_ms: int = 280,
+    delay_ms: int = 32,
+    duration_ms: int = 240,
 ) -> None:
-    """Cascade a sliding accent bar across a set of newly-added rows.
-
-    Installs a :class:`_StaggerItemDelegate` on the list, schedules one entry
-    per row (offset by ``delay_ms``), and stops the driving ``QTimer`` once
-    every row has finished.
-
-    Test contracts (``addItem``, ``count()``, ``item(row)``, ``clear()``) are
-    untouched: we only install an item delegate and toggle per-row opacity.
-    """
+    """Cascade a sliding accent bar across a set of newly-added rows."""
     targets = [int(i) for i in item_indices]
     if not targets:
         return
@@ -634,24 +655,14 @@ def stagger_list_items(
 
 
 class _StaggerItemDelegate(QStyledItemDelegate):
-    """Item delegate that paints a sliding accent bar on rows currently entering.
-
-    Per-row state is two dicts:
-      * ``_start_ms[row]`` — when the row entered (in tick counts of 16ms)
-      * ``_progress[row]`` — current 0..1 phase of the slide-in
-
-    A single ``QTimer`` ticks the entries every 16ms (60fps). Once a row's
-    phase reaches 1.0 the entry is dropped from the schedules. The delegate's
-    ``paint`` only paints the accent bar when the row has a current progress,
-    so settled rows look identical to the default delegate.
-    """
+    """Item delegate that paints a sliding accent bar on rows currently entering."""
 
     TICK_MS = 16
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._delay_ms: int = 35
-        self._duration_ms: int = 280
+        self._delay_ms: int = 32
+        self._duration_ms: int = 240
         self._start_ms: dict[int, int] = {}
         self._progress: dict[int, float] = {}
         self._tick_count: int = 0
@@ -707,14 +718,14 @@ class _StaggerItemDelegate(QStyledItemDelegate):
             return
         rect = option.rect
         accent = QColor(theme.tokens_for(theme.current_mode())["ACCENT"])
-        alpha = int(120 * (1.0 - progress))
+        alpha = int(140 * (1.0 - progress))
         accent.setAlpha(max(0, min(255, alpha)))
         painter.save()
         try:
             painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(accent)
-            bar_width = 3
+            bar_width = 2
             offset = int(8 * (1.0 - progress))
             bar_rect = QRect(
                 rect.left() - offset,
@@ -722,7 +733,7 @@ class _StaggerItemDelegate(QStyledItemDelegate):
                 bar_width,
                 rect.height() - 8,
             )
-            painter.drawRoundedRect(bar_rect, 2, 2)
+            painter.drawRoundedRect(bar_rect, 1, 1)
         finally:
             painter.restore()
 
@@ -731,33 +742,17 @@ class _StaggerItemDelegate(QStyledItemDelegate):
 
 
 class ValidatableField(QFrame):
-    """A composable container that adds inline validation to its inner widget.
-
-    Wraps a child ``QLineEdit``/``QComboBox``/``QSpinBox``-style input so that
-    missing/invalid input drives an outline ``DANGER_SOFT_BORDER`` colour, an
-    inline error label below the widget, and a single ``invalid`` property
-    the form code can bind to.
-
-    Conventions (see memory *qframe-panel-bevel-and-painted-shadow*):
-
-    - This widget inherits ``QFrame`` so it must call ``setFrameShape(NoFrame)``
-      before any QSS — otherwise Fusion's panel bevel would re-appear.
-    - The outline colour is driven by widget-level QSS keyed on the
-      ``invalid`` dynamic property; the parent stylesheet stays unaware.
-    """
+    """A composable container that adds inline validation to its inner widget."""
 
     #: Emits the new invalid state whenever it flips. ``True`` means the
     #: field is currently considered invalid (so a form-level "开始" button
     #: can wire this to ``setEnabled``).
     invalid_changed = Signal(bool)
 
-    #: Tokens that drive the inline QSS — looked up at apply time so a
-    #: runtime theme switch keeps the danger colour aligned with the rest of
-    #: the glass palette.
     _DANGER_RIM_LIGHT = "DANGER_SOFT_BORDER"
     _DANGER_RIM_DARK = "DANGER_SOFT_BORDER"
-    _ERROR_TEXT_LIGHT = "ACCENT_SOFT_TEXT"
-    _ERROR_TEXT_DARK = "DANGER_SOFT_BORDER"
+    _ERROR_TEXT_LIGHT = "DANGER"
+    _ERROR_TEXT_DARK = "DANGER"
 
     def __init__(
         self,
@@ -822,14 +817,11 @@ class ValidatableField(QFrame):
 
     # ------------------------------------------------------------------ paint
     def paintEvent(self, event) -> None:  # noqa: N802 - Qt naming
-        # Painted shadow underneath (memory convention, not QGraphicsEffect).
         super().paintEvent(event)
+        if not self._invalid:
+            return
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        rect = self.rect().adjusted(2, 2, -2, 6)
-        if rect.width() <= 0 or rect.height() <= 0:
-            painter.end()
-            return
         tokens = theme.tokens_for(theme.current_mode())
         rim_token = (
             self._DANGER_RIM_DARK
@@ -837,17 +829,11 @@ class ValidatableField(QFrame):
             else self._DANGER_RIM_LIGHT
         )
         rim_color = QColor(tokens[rim_token])
-        centre = QPoint(rect.x() + rect.width() // 2, rect.bottom() - 1)
-        radius = max(rect.width(), 60) * 0.55
+        centre = QPoint(self.width() // 2, self.height() - 1)
+        radius = max(self.width(), 60) * 0.55
         gradient = QRadialGradient(centre, radius)
-        gradient.setColorAt(
-            0.0,
-            QColor(rim_color.red(), rim_color.green(), rim_color.blue(), 28),
-        )
-        gradient.setColorAt(
-            1.0,
-            QColor(rim_color.red(), rim_color.green(), rim_color.blue(), 0),
-        )
+        gradient.setColorAt(0.0, QColor(rim_color.red(), rim_color.green(), rim_color.blue(), 32))
+        gradient.setColorAt(1.0, QColor(rim_color.red(), rim_color.green(), rim_color.blue(), 0))
         painter.fillRect(self.rect(), gradient)
         painter.end()
 

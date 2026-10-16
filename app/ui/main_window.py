@@ -22,7 +22,6 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFormLayout,
     QFrame,
-    QGraphicsDropShadowEffect,
     QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
@@ -279,11 +278,29 @@ class MainWindow(QMainWindow):
         self._register_shortcuts()
 
     #: Page title/subtitle shown in the top header, indexed like the nav rail.
-    PAGE_META: tuple[tuple[str, str], ...] = (
-        ("图片超分", "单张或批量图片超分 · 支持 jpg / png / webp"),
-        ("视频超分", "逐帧超分与硬件编码 · 仅支持 8bit SDR"),
-        ("对比预览", "单张图片完成后自动载入 · 放大镜跟随光标或滑块左右对照"),
-        ("设置", "推理设备信息与自定义模型管理"),
+    #: Subtitle is now editorial copy (a sentence, not a feature list) so the
+    #: hero reads like a magazine page header rather than a tooltip.
+    PAGE_META: tuple[tuple[str, str, str], ...] = (
+        (
+            "图片超分",
+            "Image Upscale",
+            "逐张推理、分块拼接、批量导出。批量结果在跑完后逐张对照。",
+        ),
+        (
+            "视频超分",
+            "Video Upscale",
+            "逐帧推理 + 显卡硬件编码，仅支持 8bit SDR。长视频建议先剪一段试跑。",
+        ),
+        (
+            "对比预览",
+            "Compare",
+            "放大镜跟随光标，滑块左右对照。单张任务完成后自动载入。",
+        ),
+        (
+            "设置",
+            "Settings",
+            "推理设备信息、自定义模型导入与外观切换。",
+        ),
     )
 
     #: Index of the comparison page, which single-image tasks switch to.
@@ -326,23 +343,23 @@ class MainWindow(QMainWindow):
     def _build_sidebar(self) -> QWidget:
         sidebar = QFrame()
         sidebar.setObjectName("sidebar")
-        sidebar.setFixedWidth(236)
+        sidebar.setFixedWidth(220)
 
         layout = QVBoxLayout(sidebar)
-        layout.setContentsMargins(16, 22, 16, 16)
-        layout.setSpacing(16)
+        layout.setContentsMargins(16, 26, 16, 18)
+        layout.setSpacing(20)
 
         brand = QHBoxLayout()
-        brand.setSpacing(10)
+        brand.setSpacing(12)
         mark = QLabel("SR")
         mark.setObjectName("brandMark")
-        mark.setFixedSize(38, 38)
+        mark.setFixedSize(34, 34)
         mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
         brand_text = QVBoxLayout()
-        brand_text.setSpacing(1)
-        brand_title = QLabel("Super Resolution")
+        brand_text.setSpacing(2)
+        brand_title = QLabel("SUPER")
         brand_title.setObjectName("brandTitle")
-        brand_subtitle = QLabel("本地超分工作台")
+        brand_subtitle = QLabel("Resolution · Studio")
         brand_subtitle.setObjectName("brandSubtitle")
         brand_text.addWidget(brand_title)
         brand_text.addWidget(brand_subtitle)
@@ -364,12 +381,12 @@ class MainWindow(QMainWindow):
                 button.setObjectName("navButton")
                 button.setCheckable(True)
                 button.setCursor(Qt.CursorShape.PointingHandCursor)
-                button.setMinimumHeight(38)
+                button.setMinimumHeight(36)
                 button.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
                 icon_name, shortcut = self.NAV_ICONS.get(title, ("", ""))
                 if icon_name:
-                    button.setIcon(icons_mod.icon(icon_name, 18))
-                    button.setIconSize(QSize(18, 18))
+                    button.setIcon(icons_mod.icon(icon_name, 16))
+                    button.setIconSize(QSize(16, 16))
                 if shortcut:
                     button.setToolTip(f"{title}（{shortcut}）")
                 self.nav_group.addButton(button, page_index)
@@ -399,8 +416,8 @@ class MainWindow(QMainWindow):
         content = QWidget()
         content.setObjectName("contentArea")
         layout = QVBoxLayout(content)
-        layout.setContentsMargins(24, 22, 24, 22)
-        layout.setSpacing(16)
+        layout.setContentsMargins(28, 28, 28, 24)
+        layout.setSpacing(22)
 
         layout.addWidget(self._build_header())
 
@@ -418,24 +435,29 @@ class MainWindow(QMainWindow):
         return content
 
     def _build_header(self) -> QWidget:
-        card = GlassFrame()
-        card.setObjectName("headerCard")
-        shadow = QGraphicsDropShadowEffect(card)
-        shadow.setBlurRadius(26)
-        shadow.setOffset(0, 5)
-        shadow.setColor(QColor(15, 23, 42, 24))
-        card.setGraphicsEffect(shadow)
+        """Editorial hero header: eyebrow + large title + subtitle + GPU tag.
 
-        layout = QHBoxLayout(card)
-        layout.setContentsMargins(22, 18, 22, 18)
-        layout.setSpacing(20)
+        The previous header was a frosted card with a small title and a GPU
+        pill — it read as chrome. The "STUDIO" header reads as the first
+        paragraph of a page: small eyebrow tag, heavy title, supportive
+        subtitle, then a mono-font GPU tag on the right as the by-line.
+        """
+        host = QWidget()
+        host.setObjectName("headerHost")
+        layout = QHBoxLayout(host)
+        layout.setContentsMargins(0, 0, 0, 4)
+        layout.setSpacing(24)
 
         text_column = QVBoxLayout()
-        text_column.setSpacing(3)
+        text_column.setSpacing(6)
+        self.header_eyebrow = QLabel(self.PAGE_META[0][1])
+        self.header_eyebrow.setObjectName("headerEyebrow")
         self.header_title = QLabel(self.PAGE_META[0][0])
         self.header_title.setObjectName("headerTitle")
-        self.header_subtitle = QLabel(self.PAGE_META[0][1])
+        self.header_subtitle = QLabel(self.PAGE_META[0][2])
         self.header_subtitle.setObjectName("headerSubtitle")
+        self.header_subtitle.setWordWrap(True)
+        text_column.addWidget(self.header_eyebrow)
         text_column.addWidget(self.header_title)
         text_column.addWidget(self.header_subtitle)
         layout.addLayout(text_column, 1)
@@ -443,9 +465,12 @@ class MainWindow(QMainWindow):
         self.gpu_label = QLabel(ui_logic.gpu_summary(self.gpu, self.available))
         self.gpu_label.setObjectName("gpuInfoLabel")
         self.gpu_label.setWordWrap(True)
-        self.gpu_label.setMaximumWidth(400)
-        layout.addWidget(self.gpu_label, 0, Qt.AlignmentFlag.AlignVCenter)
-        return card
+        self.gpu_label.setMaximumWidth(420)
+        self.gpu_label.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop
+        )
+        layout.addWidget(self.gpu_label, 0, Qt.AlignmentFlag.AlignTop)
+        return host
 
     def _set_page(self, index: int) -> None:
         """Switch the visible page and keep header + nav rail in sync."""
@@ -453,8 +478,9 @@ class MainWindow(QMainWindow):
         self.stack.setCurrentIndex(index)
         if previous_index != index:
             self._animate_page_transition(index)
-        title, subtitle = self.PAGE_META[index]
+        title, eyebrow, subtitle = self.PAGE_META[index]
         self.header_title.setText(title)
+        self.header_eyebrow.setText(eyebrow)
         self.header_subtitle.setText(subtitle)
         self._nav_buttons[index].setChecked(True)
 
@@ -570,26 +596,41 @@ class MainWindow(QMainWindow):
         scroll.setWidget(page)
         return scroll, layout
 
-    def _make_card(self, title: str, hint: str = "") -> tuple[QFrame, QVBoxLayout]:
-        """Create a translucent glass card with a title row, divider and body layout."""
+    def _make_card(
+        self,
+        title: str,
+        hint: str = "",
+        eyebrow: str = "",
+    ) -> tuple[QFrame, QVBoxLayout]:
+        """Create a card with an eyebrow tag, a title, an optional hint and a body layout.
+
+        The "STUDIO" cards stack vertically: small uppercase eyebrow, then the
+        bold title, then an optional hint in the muted colour, then a hairline
+        divider, then the body. The vertical rhythm is deliberate — it matches
+        the editorial hero and keeps the cards consistent regardless of the
+        page they live on.
+        """
         card = GlassFrame()
         card.setObjectName("card")
 
         outer = QVBoxLayout(card)
-        outer.setContentsMargins(18, 16, 18, 18)
-        outer.setSpacing(13)
+        outer.setContentsMargins(20, 18, 20, 20)
+        outer.setSpacing(14)
 
-        header = QHBoxLayout()
-        header.setSpacing(10)
+        if eyebrow:
+            tag = QLabel(eyebrow)
+            tag.setObjectName("cardEyebrow")
+            outer.addWidget(tag)
+
         title_label = QLabel(title)
         title_label.setObjectName("cardTitle")
-        header.addWidget(title_label)
+        outer.addWidget(title_label)
+
         if hint:
             hint_label = QLabel(hint)
             hint_label.setObjectName("cardHint")
-            header.addWidget(hint_label)
-        header.addStretch(1)
-        outer.addLayout(header)
+            hint_label.setWordWrap(True)
+            outer.addWidget(hint_label)
 
         divider = QFrame()
         divider.setObjectName("cardDivider")
@@ -670,7 +711,11 @@ class MainWindow(QMainWindow):
         return page
 
     def _build_settings_device_card(self) -> QWidget:
-        card, body = self._make_card("推理设备", "启动时自动检测")
+        card, body = self._make_card(
+            "推理设备",
+            "启动时自动检测",
+            eyebrow="Device",
+        )
         form = self._make_form()
         form.addRow(
             self._form_label("显卡厂商"),
@@ -695,6 +740,7 @@ class MainWindow(QMainWindow):
         card, body = self._make_card(
             "外观",
             "跟随系统可自动切换；切换立刻生效",
+            eyebrow="Appearance",
         )
         form = self._make_form()
         form.addRow(self._form_label("主题"), self._build_theme_switcher())
@@ -711,6 +757,7 @@ class MainWindow(QMainWindow):
         card, body = self._make_card(
             "自定义模型",
             "导入 ONNX 模型后可在此后各任务中选用",
+            eyebrow="Custom Models",
         )
         self.import_model_button = GlassButton("导入 ONNX 模型到模型库")
         self.import_model_button.setObjectName("softButton")
@@ -724,7 +771,7 @@ class MainWindow(QMainWindow):
         return card
 
     def _build_settings_about_card(self) -> QWidget:
-        card, body = self._make_card("关于")
+        card, body = self._make_card("关于", eyebrow="About")
         for text in (
             "推理后端：ONNX Runtime（CUDA / DirectML / OpenVINO）与 ncnn Vulkan",
             "视频编码：内置 ffmpeg，支持 H.264 / HEVC 硬件编码",
@@ -851,7 +898,11 @@ class MainWindow(QMainWindow):
     def _build_image_tab(self) -> QWidget:
         scroll, layout = self._make_scroll_page()
 
-        input_card, input_body = self._make_card("输入图片", "支持 jpg / png / webp，可批量加入；可拖入文件或文件夹")
+        input_card, input_body = self._make_card(
+            "输入图片",
+            "支持 jpg / png / webp，可批量加入；可拖入文件或文件夹",
+            eyebrow="01 · Inputs",
+        )
         self.image_list = ImageThumbnailList()
         self.image_list.paths_dropped.connect(self._add_image_paths)
         input_buttons = QHBoxLayout()
@@ -891,6 +942,7 @@ class MainWindow(QMainWindow):
         model_card, model_body = self._make_card(
             "模型与后端",
             "场景预设自动匹配模型；降噪模型可选独立降噪网络，留空则用内置边缘保持降噪",
+            eyebrow="02 · Model",
         )
         self.image_scale_selector = ScaleSelector()
         self.image_model_selector = ModelSelector(
@@ -901,7 +953,9 @@ class MainWindow(QMainWindow):
         model_body.addWidget(self.image_model_selector)
         layout.addWidget(model_card)
 
-        output_card, output_body = self._make_card("输出与画质")
+        output_card, output_body = self._make_card(
+            "输出与画质", eyebrow="03 · Output"
+        )
         output_form = self._make_form()
         self.image_output_dir_edit = QLineEdit(str(ui_logic.app_root() / "output"))
         output_row = QWidget()
@@ -957,7 +1011,9 @@ class MainWindow(QMainWindow):
         output_body.addLayout(output_form)
         layout.addWidget(output_card)
 
-        run_card, run_body = self._make_card("任务", "运行中可随时取消")
+        run_card, run_body = self._make_card(
+            "任务", "运行中可随时取消", eyebrow="04 · Run"
+        )
         self.image_progress = GlassProgressBar()
         self.image_progress.setRange(0, 1000)
         self.image_progress.setValue(0)
@@ -977,6 +1033,8 @@ class MainWindow(QMainWindow):
         self.image_start_button.setToolTip("开始超分（Ctrl+Enter）")
         self.image_cancel_button = GlassButton("取消")
         self.image_cancel_button.setObjectName("cancelButton")
+        self.image_cancel_button.setIcon(icons_mod.icon("pause", 16))
+        self.image_cancel_button.setIconSize(QSize(16, 16))
         self.image_cancel_button.setEnabled(False)
         self.image_cancel_button.setToolTip("取消当前任务（Esc）")
         controls.addWidget(self.image_status, 1)
@@ -1009,6 +1067,7 @@ class MainWindow(QMainWindow):
         card, body = self._make_card(
             "对比预览",
             "单张图片任务完成后自动载入；批量为逐张输出，不逐个对照",
+            eyebrow="Before · After",
         )
         self.image_compare_panel = compare_view.ComparisonPanel()
         self.image_compare_panel.add_action(
@@ -1037,7 +1096,11 @@ class MainWindow(QMainWindow):
     def _build_video_tab(self) -> QWidget:
         scroll, layout = self._make_scroll_page()
 
-        input_card, input_body = self._make_card("输入视频", ui_logic.video_8bit_notice())
+        input_card, input_body = self._make_card(
+            "输入视频",
+            ui_logic.video_8bit_notice(),
+            eyebrow="01 · Input",
+        )
         input_form = self._make_form()
         self.video_input_edit = QLineEdit()
         self.video_input_edit.textChanged.connect(self._refresh_video_meta)
@@ -1081,6 +1144,7 @@ class MainWindow(QMainWindow):
         model_card, model_body = self._make_card(
             "模型与后端",
             "逐帧超分，模型与图片任务共用；降噪模型可独立选择",
+            eyebrow="02 · Model",
         )
         self.video_scale_selector = ScaleSelector()
         self.video_model_selector = ModelSelector(
@@ -1091,7 +1155,9 @@ class MainWindow(QMainWindow):
         model_body.addWidget(self.video_model_selector)
         layout.addWidget(model_card)
 
-        output_card, output_body = self._make_card("输出与编码")
+        output_card, output_body = self._make_card(
+            "输出与编码", eyebrow="03 · Encode"
+        )
         output_form = self._make_form()
         self.video_codec_combo = ChevronComboBox()
         for codec, label in VIDEO_CODEC_OPTIONS:
@@ -1103,7 +1169,9 @@ class MainWindow(QMainWindow):
         output_body.addLayout(output_form)
         layout.addWidget(output_card)
 
-        run_card, run_body = self._make_card("任务", "运行中可随时取消")
+        run_card, run_body = self._make_card(
+            "任务", "运行中可随时取消", eyebrow="04 · Run"
+        )
         self.video_progress = GlassProgressBar()
         self.video_progress.setRange(0, 1000)
         self.video_progress.setValue(0)
@@ -1123,6 +1191,8 @@ class MainWindow(QMainWindow):
         self.video_start_button.setToolTip("开始逐帧超分与硬件编码（Ctrl+Enter）")
         self.video_cancel_button = GlassButton("取消")
         self.video_cancel_button.setObjectName("cancelButton")
+        self.video_cancel_button.setIcon(icons_mod.icon("pause", 16))
+        self.video_cancel_button.setIconSize(QSize(16, 16))
         self.video_cancel_button.setEnabled(False)
         self.video_cancel_button.setToolTip("取消当前任务（Esc）")
         controls.addWidget(self.video_status, 1)

@@ -1,14 +1,14 @@
 """Centralized application theme: design tokens + Qt stylesheet.
 
-Two parallel palettes share a single stylesheet template. The light variant
-keeps the existing tokens (still required for the ``#F5F7FA`` substring in
-``test_theme.py``); the dark variant is a parallel set tuned for a slate-900
-canvas with vibrant accents. Both palettes declare the same set of
-substitution keys, so the QSS structure never drifts between modes.
+The previous "liquid glass" surface has been retired in favour of a precise,
+editorial, pro-instrument aesthetic ("STUDIO"). Two parallel palettes — light
+and dark — share a single QSS template so the structure never drifts between
+modes. Light is now a warm paper-tone (Capture-One-like) and dark is a deep
+charcoal with a signature jade accent.
 
 Public surface (kept stable for backward compatibility with imports):
 
-* Token constants: ``BG_APP`` / ``SURFACE`` / ``ACCENT`` …  (light variant)
+* Token constants: ``BG_APP`` / ``SURFACE`` / ``ACCENT`` … (light variant)
 * Parallel dark constants: ``DARK_BG_APP`` / ``DARK_SURFACE`` / ``DARK_ACCENT`` …
 * Aggregate dicts: ``LIGHT_TOKENS`` / ``DARK_TOKENS``
 * Stylesheets: ``APP_STYLESHEET`` (= light) + ``DARK_APP_STYLESHEET``
@@ -25,117 +25,99 @@ from string import Template
 from typing import Optional
 
 # ----------------------------------------------------------------- LIGHT ---
-BG_APP = "#F5F7FA"
-SURFACE = "#FFFFFF"
-SURFACE_MUTED = "#F8FAFC"
-SURFACE_HOVER = "#F1F5F9"
-SURFACE_PRESSED = "#E7EDF5"
-BORDER = "#E6EBF3"
-BORDER_STRONG = "#D6DEEA"
-DIVIDER = "#EEF2F8"
+#: Warm paper-tone canvas (deliberately *not* #FFFFFF — pure white reads as a
+#: photo editor's blank canvas and is hostile to OLED displays).
+BG_APP = "#F4F1EB"
+SURFACE = "#FBF8F2"
+SURFACE_MUTED = "#EFEAE0"
+SURFACE_HOVER = "#E8E1D3"
+SURFACE_PRESSED = "#DED5C2"
+BORDER = "#D8CFBC"
+BORDER_STRONG = "#B7AC93"
+DIVIDER = "#E2D9C7"
 
-TEXT = "#1F2937"
-TEXT_STRONG = "#1E293B"
-TEXT_SECONDARY = "#4B5C72"
+TEXT = "#1B1B1A"
+TEXT_STRONG = "#0E0E0D"
+TEXT_SECONDARY = "#3D3A33"
 #: Quiet-but-readable text: hints, captions, secondary metadata. Every variant
-#: clears WCAG AA (4.5:1) against the surfaces it is drawn on — the glass card
-#: is translucent, so the test uses the lightest backdrop the mesh produces.
-TEXT_MUTED = "#526078"
-#: Disabled labels, input placeholders and decorative glyphs. Deliberately below
-#: AA: WCAG exempts inactive controls, and a greyed-out control has to look
-#: greyed out. Never use it for text the user must read.
-TEXT_FAINT = "#9AA7BA"
+#: clears WCAG AA (4.5:1) against the surfaces it is drawn on.
+TEXT_MUTED = "#5C574C"
+TEXT_FAINT = "#8E8878"
 
-ACCENT = "#2563EB"
-ACCENT_HOVER = "#1D4ED8"
-ACCENT_PRESSED = "#1E40AF"
-ACCENT_SOFT = "#EFF6FF"
-ACCENT_SOFT_BORDER = "#BFDBFE"
-ACCENT_SOFT_TEXT = "#1E40AF"
-ACCENT_DISABLED = "#B9CDF6"
-#: Highlight color of the gradient that flows across the progress-bar chunk.
-ACCENT_LIGHT = "#60A5FA"
+#: Accent: signature brand tone, paired across both palettes for depth.
+ACCENT = "#0A6B50"
+ACCENT_HOVER = "#085943"
+ACCENT_PRESSED = "#064636"
+ACCENT_SOFT = "#DCEFE5"
+ACCENT_SOFT_BORDER = "#9DCFB8"
+ACCENT_SOFT_TEXT = "#085943"
+ACCENT_DISABLED = "#B8D7C8"
+ACCENT_LIGHT = "#5DC9A8"
 
-#: Status colours, also used as small text (toast glyphs, inline status), so the
-#: light set is the darker end of each hue rather than the vivid mid-tone.
-SUCCESS = "#15803D"
-WARNING = "#B45309"
-DANGER = "#C81E1E"
-NEUTRAL = "#94A3B8"
-DANGER_SOFT = "#FEF2F2"
-DANGER_SOFT_BORDER = "#FCA5A5"
-
-#: Glass-surface alpha (card / sidebar over the mesh-gradient backdrop).
-LIGHT_CARD_ALPHA = "0.62"
-LIGHT_SIDEBAR_ALPHA = "0.70"
-LIGHT_HEADER_ALPHA = "0.70"
-LIGHT_HOVER_ALPHA = "0.74"
-LIGHT_PRESSED_ALPHA = "0.80"
-#: Inner-edge highlight on every glass surface (top-left rim).
-LIGHT_GLASS_RIM = "rgba(255, 255, 255, 0.85)"
-#: Subtle border between the transparent card and the backdrop.
-LIGHT_GLASS_BORDER = "rgba(148, 163, 184, 0.40)"
+SUCCESS = "#1B6E3D"
+WARNING = "#7E4F00"
+DANGER = "#9A2929"
+NEUTRAL = "#8E8878"
+DANGER_SOFT = "#F5E1DD"
+DANGER_SOFT_BORDER = "#D89A92"
 
 # ------------------------------------------------------------------ DARK ---
-#: Slate-900-ish canvas; deliberately not ``#000000`` nor ``#10151f`` (those
-#: are forbidden by ``tests/test_theme.py``).
-DARK_BG_APP = "#0F172A"
-DARK_SURFACE = "#1E293B"
-DARK_SURFACE_MUTED = "#172033"
-DARK_SURFACE_HOVER = "#22304A"
-DARK_SURFACE_PRESSED = "#2A3957"
-DARK_BORDER = "#27344B"
-DARK_BORDER_STRONG = "#3A4865"
-DARK_DIVIDER = "#1F2A3D"
+#: Deep charcoal canvas. Deliberately not #000000 — pure black eats anti-
+#: aliasing of 1px strokes and makes the accent too aggressive.
+DARK_BG_APP = "#0E0F12"
+DARK_SURFACE = "#15171B"
+DARK_SURFACE_MUTED = "#111319"
+DARK_SURFACE_HOVER = "#1C1F25"
+DARK_SURFACE_PRESSED = "#23262D"
+DARK_BORDER = "#262932"
+DARK_BORDER_STRONG = "#363A42"
+DARK_DIVIDER = "#1B1E24"
 
-DARK_TEXT = "#E2E8F0"
-DARK_TEXT_STRONG = "#F8FAFC"
-DARK_TEXT_SECONDARY = "#B6C2D4"
-DARK_TEXT_MUTED = "#8B97AB"
-DARK_TEXT_FAINT = "#64748B"
+DARK_TEXT = "#E5E3DC"
+DARK_TEXT_STRONG = "#F4F2EA"
+DARK_TEXT_SECONDARY = "#C4C1B6"
+DARK_TEXT_MUTED = "#9F9B8E"
+DARK_TEXT_FAINT = "#5C5A53"
 
-DARK_ACCENT = "#60A5FA"
-DARK_ACCENT_HOVER = "#3B82F6"
-DARK_ACCENT_PRESSED = "#2563EB"
-DARK_ACCENT_SOFT = "#172554"
-DARK_ACCENT_SOFT_BORDER = "#3B82F6"
-DARK_ACCENT_SOFT_TEXT = "#93C5FD"
-DARK_ACCENT_DISABLED = "#3F4D6E"
-DARK_ACCENT_LIGHT = "#93C5FD"
+DARK_ACCENT = "#5EEAD4"
+DARK_ACCENT_HOVER = "#2DD4BF"
+DARK_ACCENT_PRESSED = "#14B8A6"
+DARK_ACCENT_SOFT = "#102A2A"
+DARK_ACCENT_SOFT_BORDER = "#2F6F66"
+DARK_ACCENT_SOFT_TEXT = "#A7F3D0"
+DARK_ACCENT_DISABLED = "#2C5750"
+DARK_ACCENT_LIGHT = "#99F6E4"
 
 DARK_SUCCESS = "#4ADE80"
 DARK_WARNING = "#FBBF24"
 DARK_DANGER = "#F87171"
-DARK_NEUTRAL = "#64748B"
-DARK_DANGER_SOFT = "#3B1118"
-DARK_DANGER_SOFT_BORDER = "#7F1D1D"
-
-DARK_CARD_ALPHA = "0.62"
-DARK_SIDEBAR_ALPHA = "0.72"
-DARK_HEADER_ALPHA = "0.65"
-DARK_HOVER_ALPHA = "0.74"
-DARK_PRESSED_ALPHA = "0.80"
-DARK_GLASS_RIM = "rgba(255, 255, 255, 0.10)"
-DARK_GLASS_BORDER = "rgba(255, 255, 255, 0.08)"
+DARK_NEUTRAL = "#5A5A5A"
+DARK_DANGER_SOFT = "#2A1318"
+DARK_DANGER_SOFT_BORDER = "#7F2D2D"
 
 # --- Fonts ----------------------------------------------------------------
-UI_FONT = '"Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI"'
-UI_FONT_FAMILY = "Segoe UI Variable Text"
+#: Body + display. Outfit is geometric, has a wide weight range (300–900),
+# and reads distinctly at both small and very-large sizes — a deliberate move
+# away from Segoe UI Variable / Inter / Space Grotesk.
+UI_FONT = '"Outfit", "Segoe UI Variable Text", "Microsoft YaHei UI"'
+UI_FONT_FAMILY = "Outfit"
 UI_FONT_POINT_SIZE = 10
-MONO_FONT = '"Cascadia Mono", "Consolas", "Microsoft YaHei UI"'
+#: Technical readouts (file sizes, paths, model registry names, log prefixes).
+#: JetBrains Mono has a wider character width than Cascadia Mono, which keeps
+#: log lines readable without turning every digit into a serif.
+MONO_FONT = '"JetBrains Mono", "Cascadia Mono", "Consolas", "Microsoft YaHei UI"'
 
 #: Log level colours are semantic status cues, not decoration. Each variant is
-#: tuned for the surface it is read on (light: near-white log panel, dark:
-#: ``DARK_SURFACE_MUTED``) and clears WCAG AA (4.5:1) against it.
+#: tuned for the surface it is read on and clears WCAG AA (4.5:1) against it.
 LOG_LEVEL_COLORS = {
-    "Info": "#475569",
-    "Warning": "#B45309",
-    "Error": "#B91C1C",
-    "Success": "#15803D",
+    "Info": "#5C574C",
+    "Warning": "#7E4F00",
+    "Error": "#9A2929",
+    "Success": "#1B6E3D",
 }
 
 DARK_LOG_LEVEL_COLORS = {
-    "Info": "#94A3B8",
+    "Info": "#9F9B8E",
     "Warning": "#FBBF24",
     "Error": "#F87171",
     "Success": "#4ADE80",
@@ -175,30 +157,10 @@ LIGHT_TOKENS = {
     "NEUTRAL": NEUTRAL,
     "DANGER_SOFT": DANGER_SOFT,
     "DANGER_SOFT_BORDER": DANGER_SOFT_BORDER,
-    # Glass RGB: the underlying colour rendered through the alpha mask.
-    # Light glass = white over a light backdrop.
-    "GLASS_RGB": "255, 255, 255",
-    "CARD_ALPHA": LIGHT_CARD_ALPHA,
-    "SIDEBAR_ALPHA": LIGHT_SIDEBAR_ALPHA,
-    "HEADER_ALPHA": LIGHT_HEADER_ALPHA,
-    "HOVER_ALPHA": LIGHT_HOVER_ALPHA,
-    "PRESSED_ALPHA": LIGHT_PRESSED_ALPHA,
-    "GLASS_RIM": LIGHT_GLASS_RIM,
-    "GLASS_BORDER": LIGHT_GLASS_BORDER,
-    "INPUT_ALPHA": "0.62",
-    "BUTTON_ALPHA": "0.62",
-    "LIST_ALPHA": "0.62",
-    "CHECK_ALPHA": "0.62",
-    "GROOVE_ALPHA": "0.22",
-    "TRACK_ALPHA": "0.25",
-    "ITEM_HOVER_ALPHA": "0.85",
-    "FOOTER_RGB": "148, 163, 184",
-    "FOOTER_ALPHA": "0.18",
-    "PROGRESS_BG_RGB": "148, 163, 184",
-    "PROGRESS_BG_ALPHA": "0.22",
-    "CHECKBOX_BG_RGB": "255, 255, 255",
-    "CHECKBOX_BG_ALPHA": "0.62",
-    "BRAND_STOP_0": "#60A5FA",
+    # Hairline grid + film-grain texture (procedural, see BackdropWidget).
+    "GRID_RGB": "139, 132, 108",
+    "GRAIN_RGB": "60, 50, 30",
+    "GRAIN_ALPHA": "0.045",
     "UI_FONT": UI_FONT,
     "MONO_FONT": MONO_FONT,
 }
@@ -231,30 +193,9 @@ DARK_TOKENS = {
     "NEUTRAL": DARK_NEUTRAL,
     "DANGER_SOFT": DARK_DANGER_SOFT,
     "DANGER_SOFT_BORDER": DARK_DANGER_SOFT_BORDER,
-    # Glass RGB: dark glass over a dark backdrop. The same alpha gives a
-    # slightly heavier feel than light glass, which we tuned to match.
-    "GLASS_RGB": "30, 41, 59",
-    "CARD_ALPHA": DARK_CARD_ALPHA,
-    "SIDEBAR_ALPHA": DARK_SIDEBAR_ALPHA,
-    "HEADER_ALPHA": DARK_HEADER_ALPHA,
-    "HOVER_ALPHA": DARK_HOVER_ALPHA,
-    "PRESSED_ALPHA": DARK_PRESSED_ALPHA,
-    "GLASS_RIM": DARK_GLASS_RIM,
-    "GLASS_BORDER": DARK_GLASS_BORDER,
-    "INPUT_ALPHA": "0.55",
-    "BUTTON_ALPHA": "0.50",
-    "LIST_ALPHA": "0.55",
-    "CHECK_ALPHA": "0.55",
-    "GROOVE_ALPHA": "0.22",
-    "TRACK_ALPHA": "0.25",
-    "ITEM_HOVER_ALPHA": "0.30",
-    "FOOTER_RGB": "148, 163, 184",
-    "FOOTER_ALPHA": "0.18",
-    "PROGRESS_BG_RGB": "148, 163, 184",
-    "PROGRESS_BG_ALPHA": "0.14",
-    "CHECKBOX_BG_RGB": "30, 41, 59",
-    "CHECKBOX_BG_ALPHA": "0.55",
-    "BRAND_STOP_0": "#38BDF8",
+    "GRID_RGB": "70, 80, 90",
+    "GRAIN_RGB": "200, 200, 200",
+    "GRAIN_ALPHA": "0.04",
     "UI_FONT": UI_FONT,
     "MONO_FONT": MONO_FONT,
 }
@@ -269,9 +210,6 @@ def tokens_for(mode: str) -> dict:
 _STYLESHEET_TEMPLATE = Template(
     r"""
 /* ============================ base ============================ */
-/* No blanket "QWidget" rule: Qt auto-fills any styled widget that has no
-   background with the palette window colour, which turned every label and
-   row container into an opaque grey block inside the white cards. */
 QMainWindow,
 QWidget#appRoot,
 QWidget#contentArea {
@@ -304,50 +242,57 @@ QMessageBox QPushButton {
 QToolTip {
     background-color: $TEXT_STRONG;
     color: $SURFACE;
-    border: 1px solid $TEXT_STRONG;
+    border: 1px solid $BORDER_STRONG;
     padding: 4px 8px;
+    font-family: $UI_FONT;
 }
 
 /* ============================ sidebar ========================= */
 QFrame#sidebar {
-    background-color: rgba($GLASS_RGB, $SIDEBAR_ALPHA);
+    background-color: $SURFACE_MUTED;
     border: none;
-    border-right: 1px solid $GLASS_BORDER;
+    border-right: 1px solid $BORDER;
 }
 
 QLabel#brandMark {
-    background-color: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-        stop:0 $BRAND_STOP_0, stop:1 $ACCENT_PRESSED);
+    background-color: $ACCENT;
     color: $SURFACE;
-    border-radius: 11px;
-    font-size: 14px;
-    font-weight: 700;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 800;
+    font-family: $UI_FONT;
+    letter-spacing: 1px;
 }
 
 QLabel#brandTitle {
     color: $TEXT_STRONG;
-    font-size: 15px;
+    font-size: 16px;
     font-weight: 700;
+    letter-spacing: -0.2px;
 }
 
 QLabel#brandSubtitle {
     color: $TEXT_MUTED;
     font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
 }
 
 QLabel#navSection {
     color: $TEXT_MUTED;
-    font-size: 11px;
-    font-weight: 600;
-    padding: 2px 6px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1.4px;
+    padding: 0 12px;
+    text-transform: uppercase;
 }
 
 QPushButton#navButton {
     background-color: transparent;
-    border: none;
-    border-left: 3px solid transparent;
-    border-radius: 8px;
-    padding: 8px 12px;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    padding: 9px 12px;
     color: $TEXT_SECONDARY;
     font-size: 13px;
     font-weight: 500;
@@ -355,37 +300,25 @@ QPushButton#navButton {
 }
 
 QPushButton#navButton:hover {
-    background-color: rgba($GLASS_RGB, $HOVER_ALPHA);
+    background-color: $SURFACE_HOVER;
     color: $TEXT_STRONG;
 }
 
 QPushButton#navButton:checked {
     background-color: $ACCENT_SOFT;
-    border-left: 3px solid $ACCENT;
+    border-color: $ACCENT_SOFT_BORDER;
     color: $ACCENT_SOFT_TEXT;
     font-weight: 600;
 }
 
-/* Keyboard focus: the nav rail is reachable with Tab, and the checked state
-   alone does not tell the user which row the focus is on. The bar is the pale
-   accent so a focused-but-unselected row cannot be mistaken for the current
-   page, which owns the solid one. */
 QPushButton#navButton:focus {
-    background-color: $SURFACE_HOVER;
-    border-left: 3px solid $ACCENT_SOFT_BORDER;
-    color: $TEXT_STRONG;
-}
-
-QPushButton#navButton:checked:focus {
-    background-color: $ACCENT_SOFT;
-    border-left: 3px solid $ACCENT;
-    color: $ACCENT_SOFT_TEXT;
+    border-color: $ACCENT;
 }
 
 QFrame#sidebarFooter {
-    background-color: rgba($FOOTER_RGB, $FOOTER_ALPHA);
-    border: 1px solid $GLASS_BORDER;
-    border-radius: 10px;
+    background-color: transparent;
+    border: 1px solid $BORDER;
+    border-radius: 6px;
 }
 
 QLabel#sidebarFooterText {
@@ -395,52 +328,71 @@ QLabel#sidebarFooterText {
 
 /* ============================ header ========================== */
 QFrame#headerCard {
-    background-color: rgba($GLASS_RGB, $HEADER_ALPHA);
-    border: 1px solid $GLASS_BORDER;
-    border-radius: 14px;
+    background-color: transparent;
+    border: none;
+}
+
+QLabel#headerEyebrow {
+    color: $ACCENT;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 1.6px;
+    text-transform: uppercase;
 }
 
 QLabel#headerTitle {
     color: $TEXT_STRONG;
-    font-size: 20px;
-    font-weight: 700;
+    font-size: 28px;
+    font-weight: 800;
+    letter-spacing: -0.6px;
 }
 
 QLabel#headerSubtitle {
     color: $TEXT_MUTED;
-    font-size: 12px;
+    font-size: 13px;
+    font-weight: 400;
 }
 
 QLabel#gpuInfoLabel {
-    background-color: $ACCENT_SOFT;
-    border: 1px solid $ACCENT_SOFT_BORDER;
-    border-radius: 10px;
-    padding: 10px 14px;
-    color: $ACCENT_SOFT_TEXT;
-    font-size: 12px;
-    font-weight: 600;
+    background-color: $SURFACE;
+    border: 1px solid $BORDER;
+    border-radius: 6px;
+    padding: 8px 12px;
+    color: $TEXT_SECONDARY;
+    font-family: $MONO_FONT;
+    font-size: 11px;
+    font-weight: 500;
 }
 
 /* ============================ cards =========================== */
 QFrame#card {
-    background-color: rgba($GLASS_RGB, $CARD_ALPHA);
-    border: none;
-    border-radius: 12px;
+    background-color: $SURFACE;
+    border: 1px solid $BORDER;
+    border-radius: 8px;
+}
+
+QLabel#cardEyebrow {
+    color: $ACCENT;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1.6px;
+    text-transform: uppercase;
 }
 
 QLabel#cardTitle {
     color: $TEXT_STRONG;
-    font-size: 13px;
-    font-weight: 600;
+    font-size: 16px;
+    font-weight: 700;
+    letter-spacing: -0.2px;
 }
 
 QLabel#cardHint {
     color: $TEXT_MUTED;
-    font-size: 11px;
+    font-size: 12px;
 }
 
 QFrame#cardDivider {
-    background-color: $GLASS_BORDER;
+    background-color: $DIVIDER;
     border: none;
 }
 
@@ -450,9 +402,9 @@ QComboBox,
 QSpinBox,
 QPlainTextEdit,
 QListWidget {
-    background-color: rgba($GLASS_RGB, $INPUT_ALPHA);
-    border: 1px solid rgba($GLASS_RGB, 0.40);
-    border-radius: 8px;
+    background-color: $SURFACE_MUTED;
+    border: 1px solid $BORDER;
+    border-radius: 6px;
     padding: 6px 10px;
     color: $TEXT;
     selection-background-color: $ACCENT;
@@ -462,8 +414,9 @@ QListWidget {
 QLineEdit:hover,
 QComboBox:hover,
 QSpinBox:hover,
-QPlainTextEdit:hover {
-    border: 1px solid rgba($ACCENT, 0.45);
+QPlainTextEdit:hover,
+QListWidget:hover {
+    border-color: $BORDER_STRONG;
 }
 
 QLineEdit:focus,
@@ -471,7 +424,8 @@ QComboBox:focus,
 QSpinBox:focus,
 QPlainTextEdit:focus,
 QListWidget:focus {
-    border: 1px solid $ACCENT;
+    border-color: $ACCENT;
+    background-color: $SURFACE;
 }
 
 QLineEdit:disabled,
@@ -485,9 +439,9 @@ QListWidget:disabled {
 }
 
 QComboBox QAbstractItemView {
-    background-color: rgba($GLASS_RGB, 0.96);
-    border: 1px solid rgba($GLASS_RGB, 0.55);
-    border-radius: 10px;
+    background-color: $SURFACE;
+    border: 1px solid $BORDER_STRONG;
+    border-radius: 8px;
     padding: 4px;
     outline: none;
     selection-background-color: $ACCENT_SOFT;
@@ -542,28 +496,29 @@ QSpinBox::down-arrow {
 QComboBox QAbstractItemView::item {
     min-height: 30px;
     padding: 4px 10px;
-    border-radius: 7px;
+    border-radius: 6px;
     color: $TEXT_SECONDARY;
 }
 
 QComboBox QAbstractItemView::item:hover {
-    background-color: rgba($GLASS_RGB, $ITEM_HOVER_ALPHA);
+    background-color: $SURFACE_HOVER;
     color: $TEXT_STRONG;
 }
 
 /* ============================ buttons ========================= */
 QPushButton {
-    background-color: rgba($GLASS_RGB, $BUTTON_ALPHA);
+    background-color: $SURFACE;
     border: 1px solid $BORDER_STRONG;
-    border-radius: 8px;
+    border-radius: 6px;
     padding: 7px 14px;
     color: $TEXT_SECONDARY;
     font-weight: 500;
+    font-family: $UI_FONT;
 }
 
 QPushButton:hover {
     background-color: $SURFACE_HOVER;
-    border-color: $ACCENT;
+    border-color: $TEXT_FAINT;
     color: $TEXT_STRONG;
 }
 
@@ -584,10 +539,12 @@ QPushButton:focus {
 QPushButton#primaryButton {
     background-color: $ACCENT;
     border: 1px solid $ACCENT;
-    border-radius: 8px;
+    border-radius: 6px;
     padding: 9px 26px;
     color: $SURFACE;
-    font-weight: 600;
+    font-weight: 700;
+    font-family: $UI_FONT;
+    letter-spacing: 0.2px;
 }
 
 QPushButton#primaryButton:hover {
@@ -607,15 +564,15 @@ QPushButton#primaryButton:disabled {
 }
 
 QPushButton#softButton {
-    background-color: rgba($GLASS_RGB, $BUTTON_ALPHA);
-    border: 1px solid $BORDER_STRONG;
+    background-color: $SURFACE_MUTED;
+    border: 1px solid $BORDER;
     color: $TEXT_SECONDARY;
 }
 
 QPushButton#softButton:hover {
     background-color: $SURFACE_HOVER;
     color: $TEXT_STRONG;
-    border-color: $ACCENT;
+    border-color: $BORDER_STRONG;
 }
 
 QPushButton#ghostButton {
@@ -626,7 +583,7 @@ QPushButton#ghostButton {
 }
 
 QPushButton#ghostButton:hover {
-    background-color: rgba($GLASS_RGB, $HOVER_ALPHA);
+    background-color: $SURFACE_HOVER;
     border-color: transparent;
     color: $TEXT_STRONG;
 }
@@ -642,7 +599,7 @@ QPushButton#cancelButton:hover {
 QPushButton#segmentButton {
     background-color: transparent;
     border: 1px solid $BORDER;
-    border-radius: 8px;
+    border-radius: 6px;
     padding: 5px 14px;
     color: $TEXT_SECONDARY;
     font-size: 12px;
@@ -650,7 +607,7 @@ QPushButton#segmentButton {
 }
 
 QPushButton#segmentButton:hover {
-    background-color: rgba($GLASS_RGB, $HOVER_ALPHA);
+    background-color: $SURFACE_HOVER;
     border-color: $BORDER_STRONG;
     color: $TEXT_STRONG;
 }
@@ -674,16 +631,16 @@ QPushButton#cancelButton {
 
 /* ============================ progress ======================== */
 QProgressBar {
-    background-color: rgba($PROGRESS_BG_RGB, $PROGRESS_BG_ALPHA);
-    border: none;
-    border-radius: 5px;
-    min-height: 10px;
-    max-height: 10px;
+    background-color: $SURFACE_MUTED;
+    border: 1px solid $BORDER;
+    border-radius: 4px;
+    min-height: 8px;
+    max-height: 8px;
 }
 
 QProgressBar::chunk {
     background-color: $ACCENT;
-    border-radius: 5px;
+    border-radius: 3px;
 }
 
 /* ============================ sliders ========================= */
@@ -694,7 +651,7 @@ QSlider {
 
 QSlider::groove:horizontal {
     height: 4px;
-    background: rgba(148, 163, 184, $TRACK_ALPHA);
+    background: $DIVIDER;
     border-radius: 2px;
 }
 
@@ -704,7 +661,7 @@ QSlider::sub-page:horizontal {
 }
 
 QSlider::add-page:horizontal {
-    background: rgba(148, 163, 184, $TRACK_ALPHA);
+    background: $DIVIDER;
     border-radius: 2px;
 }
 
@@ -738,11 +695,11 @@ QCheckBox {
 }
 
 QCheckBox::indicator {
-    width: 18px;
-    height: 18px;
+    width: 16px;
+    height: 16px;
     border: 1px solid $BORDER_STRONG;
-    border-radius: 5px;
-    background-color: rgba($CHECKBOX_BG_RGB, $CHECKBOX_BG_ALPHA);
+    border-radius: 4px;
+    background-color: $SURFACE_MUTED;
 }
 
 QCheckBox::indicator:hover {
@@ -767,12 +724,12 @@ QListWidget {
 
 QListWidget::item {
     padding: 7px 10px;
-    border-radius: 7px;
+    border-radius: 6px;
     color: $TEXT_SECONDARY;
 }
 
 QListWidget::item:hover {
-    background-color: rgba($GLASS_RGB, $ITEM_HOVER_ALPHA);
+    background-color: $SURFACE_HOVER;
     color: $TEXT_STRONG;
 }
 
@@ -786,7 +743,7 @@ QListWidget::item:selected {
 QListWidget#settingsNav {
     background: transparent;
     border: 1px solid $BORDER;
-    border-radius: 10px;
+    border-radius: 6px;
     padding: 6px;
 }
 QListWidget#settingsNav::item {
@@ -803,17 +760,18 @@ QLabel {
 QLabel#fieldLabel {
     color: $TEXT_SECONDARY;
     font-weight: 500;
+    font-size: 12px;
 }
 
 QLabel#valueStrong {
     color: $TEXT_STRONG;
-    font-weight: 600;
+    font-weight: 700;
 }
 
 QLabel#valueBadge {
     background-color: $ACCENT_SOFT;
     border: 1px solid $ACCENT_SOFT_BORDER;
-    border-radius: 6px;
+    border-radius: 4px;
     padding: 2px 8px;
     color: $ACCENT_SOFT_TEXT;
     font-family: $MONO_FONT;
@@ -829,14 +787,16 @@ QLabel#mutedLabel {
 QLabel#statusLabel {
     color: $TEXT_SECONDARY;
     font-size: 12px;
+    font-weight: 500;
 }
 
 QLabel#videoMetaLabel {
     font-size: 12px;
     padding: 8px 10px;
-    border-radius: 8px;
+    border-radius: 6px;
     border: 1px solid $BORDER;
-    background: rgba(0, 0, 0, 0);
+    background: $SURFACE_MUTED;
+    font-family: $MONO_FONT;
 }
 QLabel#videoMetaLabel[state="placeholder"] {
     color: $TEXT_MUTED;
@@ -847,22 +807,24 @@ QLabel#videoMetaLabel[state="ok"] {
     background: $ACCENT_SOFT;
 }
 QLabel#videoMetaLabel[state="danger"] {
-    color: $ACCENT_SOFT_TEXT;
+    color: $DANGER;
     border-color: $DANGER_SOFT_BORDER;
+    background: $DANGER_SOFT;
 }
 
 QLabel#logTitle {
     color: $TEXT_STRONG;
-    font-size: 13px;
-    font-weight: 600;
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: -0.2px;
 }
 
 /* ============================ log view ======================== */
 QPlainTextEdit#logView {
     background-color: $SURFACE_MUTED;
     border: 1px solid $BORDER;
-    border-radius: 10px;
-    padding: 8px 10px;
+    border-radius: 6px;
+    padding: 10px 12px;
     color: $TEXT_SECONDARY;
     font-family: $MONO_FONT;
     font-size: 12px;
@@ -871,34 +833,34 @@ QPlainTextEdit#logView {
 /* ============================ scrollbars ====================== */
 QScrollBar:vertical {
     background: transparent;
-    width: 10px;
-    margin: 2px 0;
+    width: 8px;
+    margin: 4px 0;
 }
 
 QScrollBar::handle:vertical {
-    background: #CBD5E1;
+    background: $BORDER_STRONG;
     min-height: 34px;
-    border-radius: 5px;
+    border-radius: 4px;
 }
 
 QScrollBar::handle:vertical:hover {
-    background: #AAB9CC;
+    background: $TEXT_FAINT;
 }
 
 QScrollBar:horizontal {
     background: transparent;
-    height: 10px;
-    margin: 0 2px;
+    height: 8px;
+    margin: 0 4px;
 }
 
 QScrollBar::handle:horizontal {
-    background: #CBD5E1;
+    background: $BORDER_STRONG;
     min-width: 34px;
-    border-radius: 5px;
+    border-radius: 4px;
 }
 
 QScrollBar::handle:horizontal:hover {
-    background: #AAB9CC;
+    background: $TEXT_FAINT;
 }
 
 QScrollBar::add-line:vertical,
@@ -1014,6 +976,23 @@ def build_palette(mode: str = "light"):
     return palette
 
 
+def _load_embedded_fonts() -> list[str]:
+    """Load bundled fonts (Outfit + JetBrains Mono) if available.
+
+    The repo does not ship the font binaries; on dev machines where the user
+    has them installed system-wide this is a no-op. On packaged builds without
+    Qt's default font fallback the family still resolves through the cascade
+    in ``UI_FONT`` / ``MONO_FONT``.
+    """
+    try:
+        from PySide6.QtGui import QFontDatabase
+    except Exception:
+        return []
+    # No ttf files ship with the package — system fallback covers this. Hook
+    # left in place so a future build can ``addApplicationFont`` from disk.
+    return []
+
+
 def apply_app_theme(app, mode: str = "light", resolved: Optional[str] = None) -> str:
     """Apply Fusion, palette, UI font and stylesheet to ``app``.
 
@@ -1029,6 +1008,7 @@ def apply_app_theme(app, mode: str = "light", resolved: Optional[str] = None) ->
 
     concrete = resolve_mode(mode, resolved)
     set_current_mode(concrete)
+    _load_embedded_fonts()
     app.setStyle("Fusion")
     app.setPalette(build_palette(concrete))
     app.setFont(QFont(UI_FONT_FAMILY, UI_FONT_POINT_SIZE))

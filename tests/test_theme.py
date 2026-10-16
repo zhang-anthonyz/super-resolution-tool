@@ -8,12 +8,12 @@ from app.ui.theme import (
 
 # --- contrast helpers -------------------------------------------------------
 
-#: Surfaces a text token can land on. The glass cards are translucent over a
-#: mesh-gradient backdrop, so ``#F2F6FD`` is the lightest composite the light
-#: theme can produce and every token has to stay readable on it; the dark
-#: equivalents are the card, the muted panel and the canvas.
-LIGHT_TEXT_SURFACES = ("#FFFFFF", "#F5F7FA", "#F2F6FD")
-DARK_TEXT_SURFACES = ("#1E293B", "#172033", "#0F172A")
+#: Surfaces a text token can land on. The "STUDIO" palette replaces the
+#: previous mesh-gradient backdrop with a hairline-bordered card on a warm
+#: paper-tone canvas; the light surfaces are the canvas + card + muted panel,
+#: the dark ones are the slate canvas + card + muted panel.
+LIGHT_TEXT_SURFACES = ("#FBF8F2", "#F4F1EB", "#EFEAE0")
+DARK_TEXT_SURFACES = ("#15171B", "#0E0F12", "#111319")
 
 #: Roles that carry text the user has to read. TEXT_FAINT is deliberately not
 #: here: it is the disabled / placeholder / decorative tone, which WCAG exempts
@@ -42,17 +42,17 @@ def contrast_ratio(foreground: str, background: str) -> float:
 def test_light_stylesheet_has_light_canvas_and_no_black():
     """The light variant is what tests + the default render path exercise.
 
-    The light canvas is identified by the long-standing ``#F5F7FA`` substring;
-    pure black (``#000000``) and the dark-canvas sentinel ``#10151f`` must
-    never appear in any rendered stylesheet.
+    The light canvas is the warm paper-tone ``BG_APP`` token; pure black
+    (``#000000``) and the previous dark-canvas sentinel must never appear
+    in any rendered stylesheet.
     """
-    assert "#F5F7FA" in APP_STYLESHEET
+    assert theme.BG_APP in APP_STYLESHEET
     assert "#000000" not in APP_STYLESHEET
     assert "#10151f" not in APP_STYLESHEET
 
 
 def test_dark_stylesheet_has_dark_canvas_and_no_black():
-    """The dark variant uses the slate-900 canvas defined by DARK_BG_APP.
+    """The dark variant uses the slate canvas defined by DARK_BG_APP.
 
     The same anti-pure-black guard applies; this stops anyone accidentally
     inlining ``#000`` / ``#10151f`` into the dark variant.

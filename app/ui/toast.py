@@ -61,17 +61,17 @@ _KIND_TO_ACCENT = {
     "success": "SUCCESS",
 }
 
-#: Compact glyph drawn in the toast icon slot. ASCII so it never falls back
-#: to an unreadable tofu box on Windows servers without the Segoe font pack.
+#: Compact glyph drawn in the toast icon slot. Lowercase Latin letters so the
+#: icon never falls back to a tofu box on Windows servers missing fonts.
 _GLYPHS: dict[str, str] = {
     "info": "i",
     "warning": "!",
     "error": "x",
-    "success": "OK",
+    "success": "✓",
 }
 
 #: Painted-shadow alpha underneath the pill body.
-_SHADOW_ALPHA = 32
+_SHADOW_ALPHA = 28
 
 #: Maximum visible toast count. Older ones are dropped silently.
 _MAX_TOASTS = 6
@@ -127,19 +127,22 @@ def _build_toast_qss(kind: str, tokens: dict[str, str]) -> str:
     """Per-widget QSS for a single toast, picked up by ``setStyleSheet``.
 
     Object names keep the rules narrow so a toast QSS never leaks onto a
-    sibling ``QFrame`` in the same window.
+    sibling ``QFrame`` in the same window. The body is a hairline-bordered
+    rectangle on the SURFACE tone — no glass blur, no translucent fill —
+    matching the rest of the "STUDIO" aesthetic.
     """
     accent = tokens[_KIND_TO_ACCENT.get(kind, "ACCENT")]
-    fill = _hex_to_rgba(tokens["SURFACE"], tokens["CARD_ALPHA"])
-    rim = _hex_to_rgba(accent, 0.65)
+    fill = tokens["SURFACE"]
+    rim = tokens["BORDER_STRONG"]
     text_colour = tokens["TEXT"]
     muted = tokens["TEXT_MUTED"]
-    hover = _hex_to_rgba(tokens["SURFACE_HOVER"], 0.6)
+    hover = tokens["SURFACE_HOVER"]
     return (
         f"QFrame#toastPill {{"
         f"  background-color: {fill};"
         f"  border: 1px solid {rim};"
-        f"  border-radius: 10px;"
+        f"  border-left: 2px solid {accent};"
+        f"  border-radius: 6px;"
         f"}}"
         f"QLabel#toastMessage {{"
         f"  color: {text_colour};"
@@ -157,7 +160,7 @@ def _build_toast_qss(kind: str, tokens: dict[str, str]) -> str:
         f"  background: transparent;"
         f"  border: none;"
         f"  color: {muted};"
-        f"  border-radius: 10px;"
+        f"  border-radius: 4px;"
         f"  font-weight: 700;"
         f"}}"
         f"QPushButton#toastClose:hover {{"

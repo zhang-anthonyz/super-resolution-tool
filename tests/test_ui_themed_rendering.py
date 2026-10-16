@@ -125,7 +125,13 @@ def _first_line_colour(panel, qapp):
 
 
 def test_stretched_card_keeps_its_title_at_the_top(qapp, window):
-    """A card taller than its content must not float the title to the middle."""
+    """A card taller than its content must not float the title to the middle.
+
+    The "STUDIO" cards stack an eyebrow tag above the title, then the body.
+    The regression we still care about is that the title does not absorb the
+    card's slack — so its own height stays small and it does not drift down
+    into the body region (well past the divider).
+    """
     window.stack.setCurrentIndex(3)  # settings
     for _ in range(3):
         qapp.processEvents()
@@ -139,7 +145,8 @@ def test_stretched_card_keeps_its_title_at_the_top(qapp, window):
     assert title.height() < 40, (
         f"card title grew to {title.height()}px inside a {card.height()}px card"
     )
-    assert title.y() < 40, f"card title moved down to y={title.y()}"
+    # Title sits just below the eyebrow tag — well above the divider.
+    assert title.y() < 60, f"card title moved down to y={title.y()}"
 
 
 # --- empty states -----------------------------------------------------------
