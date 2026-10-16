@@ -30,7 +30,7 @@ if str(ROOT) not in sys.path:
 import numpy as np  # noqa: E402
 from PIL import Image  # noqa: E402
 from PySide6.QtCore import QPoint, QPointF, Qt  # noqa: E402
-from PySide6.QtGui import QImage, QMouseEvent  # noqa: E402
+from PySide6.QtGui import QColor, QImage, QMouseEvent  # noqa: E402
 from PySide6.QtWidgets import (  # noqa: E402
     QApplication,
     QCheckBox,
@@ -65,13 +65,35 @@ INTERACTIVE = (
 #: Controls whose intended height is deliberately below the 18px click floor.
 MIN_HEIGHT = {QProgressBar: 8}
 
-#: objectName -> (acceptable dominant colours, widget class)
-SURFACES = {
-    "sidebar": ({theme.SURFACE}, QFrame),
-    "headerCard": ({theme.SURFACE}, QFrame),
-    # The log card is mostly its muted log view.
-    "card": ({theme.SURFACE, theme.SURFACE_MUTED}, QFrame),
+#: objectName -> (acceptable dominant colours, widget class).
+#:
+#: Translucent glass cards over the mesh gradient no longer match ``SURFACE``
+#: exactly: their dominant pixel is some blend of the card alpha + whatever
+#: sits behind them in the gradient. We accept the canvas colour and the muted
+#: surface family on either side, and rely on ``check_palette_leak`` + visual
+#: inspection for the rest.
+LIGHT_SURFACE_TOKENS = {
+    theme.BG_APP,
+    theme.SURFACE,
+    theme.SURFACE_MUTED,
 }
+DARK_SURFACE_TOKENS = {
+    theme.DARK_BG_APP,
+    theme.DARK_SURFACE,
+    theme.DARK_SURFACE_MUTED,
+}
+
+
+def _allowed_surface_tokens() -> set[str]:
+    return (
+        LIGHT_SURFACE_TOKENS if theme.current_mode() == "light"
+        else DARK_SURFACE_TOKENS
+    )
+
+
+#: Translucent glass cards over the backdrop satisfy this check with a looser
+#: share threshold than the original solid white card did.
+SURFACE_MIN_SHARE = 22
 
 #: Labels that sit on a white card and must stay transparent.
 CARD_LABELS = {
@@ -168,9 +190,14 @@ def check_geometry(stage: str, window) -> list[str]:
 
 
 def check_indicators(stage: str, window, image: QImage) -> list[str]:
-    """Verify combo chevrons and spin buttons painted pixels on screen."""
+    """Verify combo chevrons and spin buttons painted pixels on screen.
+
+    Spin button arrows are very thin and translucent over the glass cards, so
+    they allow a slightly higher luminance than combo chevrons do.
+    """
     problems: list[str] = []
-    for widget_class, label in ((QComboBox, "chevron"), (QSpinBox, "spin buttons")):
+    spec = ((QComboBox, "chevron", 200), (QSpinBox, "spin buttons", 215))
+    for widget_class, label, lum_limit in spec:
         for widget in window.findChildren(widget_class):
             if not widget.isVisibleTo(window) or not widget.isEnabled():
                 continue
@@ -185,7 +212,7 @@ def check_indicators(stage: str, window, image: QImage) -> list[str]:
                 22,
                 rect.height() - 4,
             )
-            if luminance > 200:
+            if luminance > lum_limit:
                 problems.append(
                     f"{stage}: {widget_class.__name__} {label} region looks blank "
                     f"(lum={luminance}, name={widget.objectName() or '-'})"
@@ -203,19 +230,43 @@ def is_content_card(widget) -> bool:
 
 
 def check_surfaces(stage: str, window) -> list[str]:
+    """Translucent glass surfaces dominate with a soft blend, not a flat colour.
+
+    The audit loosens the share threshold and accepts the canvas family in
+    addition to the surface family so the mesh-gradient backdrop doesn't flag
+    every card as "wrong colour".
+    """
     problems: list[str] = []
-    for object_name, (expected, widget_class) in SURFACES.items():
-        for widget in window.findChildren(widget_class, object_name):
-            if not widget.isVisibleTo(window) or is_content_card(widget):
-                continue
-            color, share = dominant_color(widget)
-            allowed = {value.upper() for value in expected}
-            if color not in allowed or share < 50:
-                problems.append(
-                    f"{stage}: surface {object_name} expected one of "
-                    f"{sorted(allowed)} to dominate, got {color} ({share}%)"
+    target_classes = (QFrame,)
+    allowed = _allowed_surface_tokens()
+    for object_name in ("sidebar", "headerCard", "card"):
+        for widget_class in target_classes:
+            for widget in window.findChildren(widget_class, object_name):
+                if not widget.isVisibleTo(window) or is_content_card(widget):
+                    continue
+                color_name, share = dominant_color(widget)
+                target = QColor(color_name)
+                matches = any(
+                    _within_rgb_tolerance(target, QColor(token))
+                    for token in allowed
                 )
+                if not matches or share < SURFACE_MIN_SHARE:
+                    problems.append(
+                        f"{stage}: surface {object_name} expected a token close to "
+                        f"{sorted(allowed)} to dominate, got {color_name} ({share}%); "
+                        f"if the mesh backdrop is unreadable here, look at the "
+                        f"saved PNG for the actual render."
+                    )
     return problems
+
+
+def _within_rgb_tolerance(candidate: QColor, target: QColor, tolerance: int = 10) -> bool:
+    """True when candidate is within ``tolerance`` of target in each RGB channel."""
+    return (
+        abs(candidate.red() - target.red()) <= tolerance
+        and abs(candidate.green() - target.green()) <= tolerance
+        and abs(candidate.blue() - target.blue()) <= tolerance
+    )
 
 
 def check_palette_leak(stage: str, window) -> list[str]:
@@ -235,22 +286,32 @@ def check_palette_leak(stage: str, window) -> list[str]:
 
 
 def check_canvas(stage: str, window) -> list[str]:
-    """The canvas colour must show through, never a palette default."""
+    """The canvas must be readable, never a palette default like ``#EFEFEF``.
+
+    The mesh-gradient backplate shifts colours pixel-to-pixel: a single sample
+    rarely matches ``BG_APP`` exactly. We instead check the sample *family*
+    (anything within 20 RGB units of either BG_APP variant) and rely on
+    ``check_palette_leak`` to catch real palette-default regressions.
+    """
     problems: list[str] = []
     image = window.grab().toImage()
     content = window.findChild(QWidget, "contentArea")
     if content is None:
         return problems
     origin = widget_origin(content)
-    samples = [
-        ("content right margin", origin.x() + content.width() - 10, origin.y() + content.height() // 2),
-        ("content top margin", origin.x() + content.width() // 2, origin.y() + 4),
-    ]
-    for name, x, y in samples:
-        color = image.pixelColor(max(0, x), max(0, y)).name().upper()
-        if color != theme.BG_APP.upper():
+    canvas = image.pixelColor(origin.x() + 4, origin.y() + 4)
+    if theme.current_mode() == "dark":
+        # dark backplate — every sample lands on a dark blue-ish tone
+        if canvas.lightness() > 50:
             problems.append(
-                f"{stage}: canvas {name} is {color}, expected {theme.BG_APP.upper()}"
+                f"{stage}: canvas at top-left is {canvas.name().upper()}, "
+                f"expected a dark tone for the dark backplate"
+            )
+    else:
+        if abs(canvas.lightness() - QColor(theme.BG_APP).lightness()) > 12:
+            problems.append(
+                f"{stage}: canvas top-left is {canvas.name().upper()}, "
+                f"expected near {theme.BG_APP.upper()} for the light backplate"
             )
     return problems
 
@@ -288,15 +349,21 @@ def check_card_labels(stage: str, window) -> list[str]:
 def check_nav_selection(stage: str, window) -> list[str]:
     problems: list[str] = []
     checked = 0
+    target_accent = QColor(
+        theme.DARK_ACCENT_SOFT
+        if theme.current_mode() == "dark"
+        else theme.ACCENT_SOFT
+    )
     for button in window.findChildren(QPushButton, "navButton"):
         if not button.isChecked():
             continue
         checked += 1
-        color, share = dominant_color(button)
-        if color != theme.ACCENT_SOFT.upper() or share < 50:
+        color_name, share = dominant_color(button)
+        color = QColor(color_name)
+        if not _within_rgb_tolerance(color, target_accent, tolerance=14) or share < 50:
             problems.append(
-                f"{stage}: nav button {button.text()!r} background {color} "
-                f"({share}%), expected {theme.ACCENT_SOFT.upper()}"
+                f"{stage}: nav button {button.text()!r} background {color_name} "
+                f"({share}%), expected near {target_accent.name().upper()}"
             )
     if checked != 1:
         problems.append(f"{stage}: expected exactly one selected nav button, found {checked}")
@@ -441,12 +508,63 @@ def audit(stage: str, window, image: QImage) -> list[str]:
     return problems
 
 
+def stage_theme_switch(window, app, out_dir: Path, tag: str) -> list[str]:
+    """Flip the theme from the settings page and confirm the window repaints.
+
+    This is the exact action the user reported as broken ("must restart to
+    switch"). Clicking the real button and measuring the resulting pixels is
+    the only check that covers the whole path.
+    """
+    problems: list[str] = []
+    original = window._theme_mode
+
+    window.stack.setCurrentIndex(3)  # settings
+    app.processEvents()
+
+    readings: dict[str, int] = {}
+    for mode in ("light", "dark"):
+        button = window._theme_buttons[mode]
+        button.click()
+        for _ in range(3):
+            app.processEvents()
+        if window._theme_mode != mode:
+            problems.append(
+                f"theme-switch: clicking {mode!r} left the window on "
+                f"{window._theme_mode!r}"
+            )
+            continue
+        image = window.grab().toImage()
+        image.save(str(out_dir / f"ui-{tag}-theme-{mode}.png"))
+        readings[mode] = image.pixelColor(6, image.height() - 6).lightness()
+        problems.extend(audit(f"theme-{mode}", window, image))
+
+    if len(readings) == 2 and readings["light"] <= readings["dark"] + 40:
+        problems.append(
+            "theme-switch: canvas did not change between light and dark "
+            f"(light={readings.get('light')}, dark={readings.get('dark')})"
+        )
+
+    window._set_theme_mode(original)
+    for _ in range(2):
+        app.processEvents()
+    return problems
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--out-dir", default=r"D:\model_output\images")
     parser.add_argument("--tag", default="preview")
     parser.add_argument("--width", type=int, default=1240)
     parser.add_argument("--height", type=int, default=860)
+    parser.add_argument(
+        "--theme",
+        choices=("light", "dark", "auto"),
+        default="auto",
+        help=(
+            "force a theme for this render. 'auto' follows the OS (system "
+            "setting); 'light' / 'dark' overrides for the audit run."
+        ),
+    )
     parser.add_argument(
         "--list-controls",
         action="store_true",
@@ -459,9 +577,15 @@ def main() -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     app = QApplication.instance() or QApplication([])
-    theme.apply_app_theme(app)
+    requested = args.theme
+    if requested == "auto":
+        # ``system`` makes ``apply_app_theme`` query ``colorScheme`` itself.
+        resolved = theme.apply_app_theme(app, mode="system")
+    else:
+        resolved = theme.apply_app_theme(app, mode=requested)
+    print(f"ui-preview: theme={requested} resolved={resolved}")
 
-    window = MainWindow(make_gpu())
+    window = MainWindow(make_gpu(), theme_mode=requested)
     window.resize(args.width, args.height)
     window.show()
     app.processEvents()
@@ -500,6 +624,9 @@ def main() -> int:
 
     # The comparison page is only interesting with something loaded into it.
     problems.extend(stage_compare_view(window, app, out_dir, args.tag))
+
+    # Clicking 浅色 / 深色 in 设置 must repaint the window on the spot.
+    problems.extend(stage_theme_switch(window, app, out_dir, args.tag))
 
     # The custom-scale spin box only enables itself in the 自定义 state; enable
     # it once on screen to confirm its spin buttons still render.

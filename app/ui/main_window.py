@@ -1,12 +1,20 @@
 """Main PySide6 window for the super-resolution tool."""
 from __future__ import annotations
 
+import re
 import time
 from pathlib import Path
 from typing import Optional, Sequence
 
-from PySide6.QtCore import Qt, QThread
-from PySide6.QtGui import QColor, QFont, QTextCharFormat, QTextCursor
+from PySide6.QtCore import (
+    QSize,
+    Qt,
+    QThread,
+    QTimer,
+    QPropertyAnimation,
+    QEasingCurve,
+)
+from PySide6.QtGui import QColor, QFont, QKeySequence, QShortcut, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
@@ -14,14 +22,13 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFormLayout,
     QFrame,
-    QGraphicsDropShadowEffect,
+    QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
     QMainWindow,
-    QMessageBox,
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
@@ -54,16 +61,29 @@ from . import ui_logic
 from . import theme
 from .ui_logic import BackendChoice
 from .model_selector import ModelSelector
-from .widgets import ChevronComboBox
+from .widgets import (
+    BackdropWidget,
+    ChevronComboBox,
+    GlassButton,
+    GlassFrame,
+    GlassProgressBar,
+    PlusMinusSpinBox,
+    stagger_list_items,
+)
 from . import compare_view
+from . import icons as icons_mod
+from . import toast as toast_mod
+from .image_grid import ImageThumbnailList
+from .toast import Toast, ToastHost, install_toast_host
 from .workers import ImageUpscaleWorker, VideoUpscaleWorker
 
 
-_PROGRESS_CHUNK_QSS = "QProgressBar::chunk { background-color: %s; border-radius: 5px; }"
-_PROGRESS_COLOR_SUCCESS = theme.SUCCESS
-_PROGRESS_COLOR_ERROR = theme.DANGER
-_PROGRESS_COLOR_PARTIAL = theme.WARNING
-_PROGRESS_COLOR_CANCELLED = theme.NEUTRAL
+#: Progress-bar chunk families, by name — ``GlassProgressBar.set_state`` owns
+#: the actual colours so they stay in step with the active theme.
+_PROGRESS_STATE_SUCCESS = "success"
+_PROGRESS_STATE_ERROR = "error"
+_PROGRESS_STATE_PARTIAL = "warning"
+_PROGRESS_STATE_CANCELLED = "cancelled"
 
 
 VIDEO_CODEC_OPTIONS: tuple[tuple[VideoCodec, str], ...] = (
@@ -88,7 +108,7 @@ class ScaleSelector(QWidget):
         self.combo.addItem("自定义", None)
         self.combo.setCurrentIndex(2)
 
-        self.custom_spin = QSpinBox()
+        self.custom_spin = PlusMinusSpinBox()
         self.custom_spin.setRange(2, 8)
         self.custom_spin.setValue(4)
         self.custom_spin.setEnabled(False)
@@ -122,8 +142,6 @@ class ScaleSelector(QWidget):
 class LogPanel(QFrame):
     """Timestamped, color-coded, copyable log card."""
 
-    LEVEL_COLORS = {key: QColor(value) for key, value in theme.LOG_LEVEL_COLORS.items()}
-
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setObjectName("card")
@@ -138,9 +156,9 @@ class LogPanel(QFrame):
         title.setObjectName("cardTitle")
         header.addWidget(title)
         header.addStretch(1)
-        copy_button = QPushButton("复制")
+        copy_button = GlassButton("复制")
         copy_button.setObjectName("ghostButton")
-        clear_button = QPushButton("清空")
+        clear_button = GlassButton("清空")
         clear_button.setObjectName("ghostButton")
         copy_button.clicked.connect(self.copy_to_clipboard)
         clear_button.clicked.connect(self.clear)
@@ -168,17 +186,58 @@ class LogPanel(QFrame):
     def copy_to_clipboard(self) -> None:
         QApplication.clipboard().setText(self.text_edit.toPlainText())
 
+    def recolour(self) -> None:
+        """Re-apply the level colours of the current theme to existing lines.
+
+        The colour is baked into the character format when a line is appended,
+        so lines written before a theme switch would keep the previous theme's
+        ink — and dark ink on the dark log panel is unreadable. The level is
+        recovered from the ``[HH:MM:SS] [Level]`` prefix the panel always writes.
+        """
+        document = self.text_edit.document()
+        cursor = QTextCursor(document)
+        cursor.beginEditBlock()
+        try:
+            block = document.firstBlock()
+            while block.isValid():
+                line_cursor = QTextCursor(block)
+                line_cursor.movePosition(
+                    QTextCursor.MoveOperation.EndOfBlock,
+                    QTextCursor.MoveMode.KeepAnchor,
+                )
+                line_cursor.mergeCharFormat(
+                    self._format_for_level(self._level_of(block.text()))
+                )
+                block = block.next()
+        finally:
+            cursor.endEditBlock()
+
+    @classmethod
+    def _level_of(cls, line: str) -> str:
+        match = cls._LEVEL_RE.match(line)
+        return match.group(1) if match else "Info"
+
     @classmethod
     def _format_for_level(cls, level: str) -> QTextCharFormat:
+        tokens = theme.tokens_for(theme.current_mode())
+        colours = theme.log_level_colors(theme.current_mode())
         fmt = QTextCharFormat()
-        fmt.setForeground(cls.LEVEL_COLORS.get(level, QColor(theme.TEXT_SECONDARY)))
+        fmt.setForeground(QColor(colours.get(level, tokens["TEXT_SECONDARY"])))
         return fmt
+
+    #: How :func:`ui_logic.format_log_line` prefixes every panel line.
+    _LEVEL_RE = re.compile(r"^\[\d{2}:\d{2}:\d{2}\]\s*\[(\w+)\]")
 
 
 class MainWindow(QMainWindow):
     """Top-level application window with image, video, and settings tabs."""
 
-    def __init__(self, gpu: GpuInfo, parent: Optional[QWidget] = None) -> None:
+    def __init__(
+        self,
+        gpu: GpuInfo,
+        parent: Optional[QWidget] = None,
+        theme_mode: str = "system",
+    ) -> None:
         super().__init__(parent)
         self.gpu = gpu
         self.backend_selector = BackendSelector(gpu)
@@ -196,6 +255,17 @@ class MainWindow(QMainWindow):
         self._video_progress_last_time = 0.0
         self._video_progress_last_frame = -1
         self._settings = load_settings()
+        # Theme: a caller-supplied mode wins — but "system" is also a valid
+        # *user* choice, so it must not shadow what was saved. An earlier
+        # version kept the constructor value in a separate "override" field
+        # and applied it ahead of the live choice, which made the settings
+        # switch look like it needed a restart.
+        stored_mode = self._settings.get("theme_mode")
+        self._theme_mode = (
+            theme_mode if theme_mode in ("system", "light", "dark") else "system"
+        )
+        if self._theme_mode == "system" and stored_mode in ("system", "light", "dark"):
+            self._theme_mode = stored_mode
 
         self.setWindowTitle("Super Resolution Tool · 本地超分工作台")
         self.resize(1240, 840)
@@ -204,13 +274,33 @@ class MainWindow(QMainWindow):
         self._connect_signals()
         self._apply_style()
         self._apply_saved_settings()
+        self._shortcuts: list[QShortcut] = []
+        self._register_shortcuts()
 
     #: Page title/subtitle shown in the top header, indexed like the nav rail.
-    PAGE_META: tuple[tuple[str, str], ...] = (
-        ("图片超分", "单张或批量图片超分 · 支持 jpg / png / webp"),
-        ("视频超分", "逐帧超分与硬件编码 · 仅支持 8bit SDR"),
-        ("对比预览", "单张图片完成后自动载入 · 放大镜跟随光标或滑块左右对照"),
-        ("设置", "推理设备信息与自定义模型管理"),
+    #: Subtitle is now editorial copy (a sentence, not a feature list) so the
+    #: hero reads like a magazine page header rather than a tooltip.
+    PAGE_META: tuple[tuple[str, str, str], ...] = (
+        (
+            "图片超分",
+            "Image Upscale",
+            "逐张推理、分块拼接、批量导出。批量结果在跑完后逐张对照。",
+        ),
+        (
+            "视频超分",
+            "Video Upscale",
+            "逐帧推理 + 显卡硬件编码，仅支持 8bit SDR。长视频建议先剪一段试跑。",
+        ),
+        (
+            "对比预览",
+            "Compare",
+            "放大镜跟随光标，滑块左右对照。单张任务完成后自动载入。",
+        ),
+        (
+            "设置",
+            "Settings",
+            "推理设备信息、自定义模型导入与外观切换。",
+        ),
     )
 
     #: Index of the comparison page, which single-image tasks switch to.
@@ -222,37 +312,54 @@ class MainWindow(QMainWindow):
         ("系统", ("设置",)),
     )
 
+    #: Icon per navigation title, plus the keyboard shortcut shown in its
+    #: tooltip (the shortcuts themselves are bound in ``_register_shortcuts``).
+    NAV_ICONS: dict[str, tuple[str, str]] = {
+        "图片超分": ("image", "Ctrl+1"),
+        "视频超分": ("video", "Ctrl+2"),
+        "对比预览": ("compare", "Ctrl+3"),
+        "设置": ("settings", "Ctrl+4"),
+    }
+
     def _build_ui(self) -> None:
-        root = QWidget()
-        root.setObjectName("appRoot")
+        root = BackdropWidget()
         root_layout = QHBoxLayout(root)
         root_layout.setContentsMargins(0, 0, 0, 0)
         root_layout.setSpacing(0)
         root_layout.addWidget(self._build_sidebar())
         root_layout.addWidget(self._build_content(), 1)
         self.setCentralWidget(root)
+        # Toast host lives directly on the QMainWindow so it overlays every
+        # page (and the sidebar) without being clipped by the central widget.
+        self.toast_host: ToastHost = install_toast_host(self)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        super().resizeEvent(event)
+        host = getattr(self, "toast_host", None)
+        if host is not None:
+            host.reposition()
 
     # ------------------------------------------------------------- sidebar --
     def _build_sidebar(self) -> QWidget:
         sidebar = QFrame()
         sidebar.setObjectName("sidebar")
-        sidebar.setFixedWidth(236)
+        sidebar.setFixedWidth(220)
 
         layout = QVBoxLayout(sidebar)
-        layout.setContentsMargins(16, 22, 16, 16)
-        layout.setSpacing(16)
+        layout.setContentsMargins(16, 26, 16, 18)
+        layout.setSpacing(20)
 
         brand = QHBoxLayout()
-        brand.setSpacing(10)
+        brand.setSpacing(12)
         mark = QLabel("SR")
         mark.setObjectName("brandMark")
-        mark.setFixedSize(38, 38)
+        mark.setFixedSize(34, 34)
         mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
         brand_text = QVBoxLayout()
-        brand_text.setSpacing(1)
-        brand_title = QLabel("Super Resolution")
+        brand_text.setSpacing(2)
+        brand_title = QLabel("SUPER")
         brand_title.setObjectName("brandTitle")
-        brand_subtitle = QLabel("本地超分工作台")
+        brand_subtitle = QLabel("Resolution · Studio")
         brand_subtitle.setObjectName("brandSubtitle")
         brand_text.addWidget(brand_title)
         brand_text.addWidget(brand_subtitle)
@@ -270,12 +377,18 @@ class MainWindow(QMainWindow):
             section_label.setObjectName("navSection")
             layout.addWidget(section_label)
             for title in titles:
-                button = QPushButton(title)
+                button = GlassButton(title)
                 button.setObjectName("navButton")
                 button.setCheckable(True)
                 button.setCursor(Qt.CursorShape.PointingHandCursor)
-                button.setMinimumHeight(38)
-                button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+                button.setMinimumHeight(36)
+                button.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+                icon_name, shortcut = self.NAV_ICONS.get(title, ("", ""))
+                if icon_name:
+                    button.setIcon(icons_mod.icon(icon_name, 16))
+                    button.setIconSize(QSize(16, 16))
+                if shortcut:
+                    button.setToolTip(f"{title}（{shortcut}）")
                 self.nav_group.addButton(button, page_index)
                 self._nav_buttons.append(button)
                 layout.addWidget(button)
@@ -303,8 +416,8 @@ class MainWindow(QMainWindow):
         content = QWidget()
         content.setObjectName("contentArea")
         layout = QVBoxLayout(content)
-        layout.setContentsMargins(24, 22, 24, 22)
-        layout.setSpacing(16)
+        layout.setContentsMargins(28, 28, 28, 24)
+        layout.setSpacing(22)
 
         layout.addWidget(self._build_header())
 
@@ -322,24 +435,29 @@ class MainWindow(QMainWindow):
         return content
 
     def _build_header(self) -> QWidget:
-        card = QFrame()
-        card.setObjectName("headerCard")
-        shadow = QGraphicsDropShadowEffect(card)
-        shadow.setBlurRadius(26)
-        shadow.setOffset(0, 5)
-        shadow.setColor(QColor(15, 23, 42, 24))
-        card.setGraphicsEffect(shadow)
+        """Editorial hero header: eyebrow + large title + subtitle + GPU tag.
 
-        layout = QHBoxLayout(card)
-        layout.setContentsMargins(22, 18, 22, 18)
-        layout.setSpacing(20)
+        The previous header was a frosted card with a small title and a GPU
+        pill — it read as chrome. The "STUDIO" header reads as the first
+        paragraph of a page: small eyebrow tag, heavy title, supportive
+        subtitle, then a mono-font GPU tag on the right as the by-line.
+        """
+        host = QWidget()
+        host.setObjectName("headerHost")
+        layout = QHBoxLayout(host)
+        layout.setContentsMargins(0, 0, 0, 4)
+        layout.setSpacing(24)
 
         text_column = QVBoxLayout()
-        text_column.setSpacing(3)
+        text_column.setSpacing(6)
+        self.header_eyebrow = QLabel(self.PAGE_META[0][1])
+        self.header_eyebrow.setObjectName("headerEyebrow")
         self.header_title = QLabel(self.PAGE_META[0][0])
         self.header_title.setObjectName("headerTitle")
-        self.header_subtitle = QLabel(self.PAGE_META[0][1])
+        self.header_subtitle = QLabel(self.PAGE_META[0][2])
         self.header_subtitle.setObjectName("headerSubtitle")
+        self.header_subtitle.setWordWrap(True)
+        text_column.addWidget(self.header_eyebrow)
         text_column.addWidget(self.header_title)
         text_column.addWidget(self.header_subtitle)
         layout.addLayout(text_column, 1)
@@ -347,17 +465,120 @@ class MainWindow(QMainWindow):
         self.gpu_label = QLabel(ui_logic.gpu_summary(self.gpu, self.available))
         self.gpu_label.setObjectName("gpuInfoLabel")
         self.gpu_label.setWordWrap(True)
-        self.gpu_label.setMaximumWidth(400)
-        layout.addWidget(self.gpu_label, 0, Qt.AlignmentFlag.AlignVCenter)
-        return card
+        self.gpu_label.setMaximumWidth(420)
+        self.gpu_label.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop
+        )
+        layout.addWidget(self.gpu_label, 0, Qt.AlignmentFlag.AlignTop)
+        return host
 
     def _set_page(self, index: int) -> None:
         """Switch the visible page and keep header + nav rail in sync."""
+        previous_index = self.stack.currentIndex()
         self.stack.setCurrentIndex(index)
-        title, subtitle = self.PAGE_META[index]
+        if previous_index != index:
+            self._animate_page_transition(index)
+        title, eyebrow, subtitle = self.PAGE_META[index]
         self.header_title.setText(title)
+        self.header_eyebrow.setText(eyebrow)
         self.header_subtitle.setText(subtitle)
         self._nav_buttons[index].setChecked(True)
+
+    def _animate_page_transition(self, target_index: int) -> None:
+        """Fade-in the newly-selected page over 180ms.
+
+        Switching pages synchronously keeps ``QStackedWidget.currentIndex``
+        and any test that reads it honest; the fade-in is purely additive
+        polish and is skipped when the result would be invisible anyway
+        (no point animating a stack that holds offscreen test widgets).
+        """
+        target = self.stack.widget(target_index)
+        if target is None:
+            return
+        # Skipping on offscreen renders keeps the offscreen audit (and tests)
+        # from contending with a running animation while they try to ``grab()``
+        # the window.
+        if not self.isVisible():
+            return
+        if not target.graphicsEffect():
+            target.setGraphicsEffect(QGraphicsOpacityEffect(target))
+        effect = target.graphicsEffect()
+        assert isinstance(effect, QGraphicsOpacityEffect)
+        effect.setOpacity(0.0)
+        fade = QPropertyAnimation(effect, b"opacity", self.stack)
+        fade.setDuration(180)
+        fade.setStartValue(0.0)
+        fade.setEndValue(1.0)
+        fade.setEasingCurve(QEasingCurve.Type.OutCubic)
+        # Land on exactly 1.0: an interrupted fade would otherwise leave a
+        # page stuck at partial opacity.
+        fade.finished.connect(lambda: effect.setOpacity(1.0))
+        fade.start()
+        self._page_fade = fade
+
+    # -------------------------------------------------------------- shortcuts
+    def _register_shortcuts(self) -> None:
+        """Global keyboard accelerators.
+
+        Hooks stay bound to ``self`` so they survive the parent's destruction
+        and are removed when the window is closed (``Qt.ApplicationShortcut``
+        is global; weak refs prevent the shortcut from leaking the window).
+        """
+
+        def bind(seq: str, slot) -> QShortcut:
+            sc = QShortcut(QKeySequence(seq), self)
+            sc.setContext(Qt.ShortcutContext.ApplicationShortcut)
+            sc.activated.connect(slot)
+            self._shortcuts.append(sc)
+            return sc
+
+        # Page-switch: Ctrl+1..4
+        bind("Ctrl+1", lambda: self._set_page(0))
+        bind("Ctrl+2", lambda: self._set_page(1))
+        bind("Ctrl+3", lambda: self._set_page(2))
+        bind("Ctrl+4", lambda: self._set_page(3))
+
+        # Start current page's task. Ctrl+Enter covers both Enter positions
+        # so the bind works regardless of numpad layout.
+        bind("Ctrl+Return", self._shortcut_start_current)
+        bind("Ctrl+Enter", self._shortcut_start_current)
+
+        # Cancel the running task (or close a modal dialog if any is open).
+        bind("Escape", self._shortcut_escape)
+
+        # Cycle theme: light -> dark -> system -> light.
+        bind("Ctrl+T", self._cycle_theme)
+
+    def _shortcut_start_current(self) -> None:
+        index = self.stack.currentIndex()
+        if index == 0:
+            self.start_image_upscale()
+        elif index == 1:
+            self.start_video_upscale()
+
+    def _shortcut_escape(self) -> None:
+        # If a task is running, the Esc cancels it; otherwise close any
+        # open comparison dialog so the user always has a way out.
+        if self._task_busy():
+            if self._image_worker is not None:
+                self.cancel_image_upscale()
+            elif self._video_worker is not None:
+                self.cancel_video_upscale()
+            return
+        dialog = self._compare_dialog
+        if dialog is not None and dialog.isVisible():
+            dialog.close()
+            return
+        # Nothing else to dismiss; surface a hint instead of swallowing.
+        toast_mod.notify(self, "当前没有正在运行的任务", kind="info", timeout_ms=1500)
+
+    def _cycle_theme(self) -> None:
+        cycle = ("light", "dark", "system")
+        try:
+            next_mode = cycle[(cycle.index(self._theme_mode) + 1) % len(cycle)]
+        except ValueError:
+            next_mode = "light"
+        self._set_theme_mode(next_mode)
 
     # --------------------------------------------------------- card helpers --
     def _make_scroll_page(self) -> tuple[QScrollArea, QVBoxLayout]:
@@ -375,26 +596,41 @@ class MainWindow(QMainWindow):
         scroll.setWidget(page)
         return scroll, layout
 
-    def _make_card(self, title: str, hint: str = "") -> tuple[QFrame, QVBoxLayout]:
-        """Create a white card with a title row, divider and body layout."""
-        card = QFrame()
+    def _make_card(
+        self,
+        title: str,
+        hint: str = "",
+        eyebrow: str = "",
+    ) -> tuple[QFrame, QVBoxLayout]:
+        """Create a card with an eyebrow tag, a title, an optional hint and a body layout.
+
+        The "STUDIO" cards stack vertically: small uppercase eyebrow, then the
+        bold title, then an optional hint in the muted colour, then a hairline
+        divider, then the body. The vertical rhythm is deliberate — it matches
+        the editorial hero and keeps the cards consistent regardless of the
+        page they live on.
+        """
+        card = GlassFrame()
         card.setObjectName("card")
 
         outer = QVBoxLayout(card)
-        outer.setContentsMargins(18, 16, 18, 18)
-        outer.setSpacing(13)
+        outer.setContentsMargins(20, 18, 20, 20)
+        outer.setSpacing(14)
 
-        header = QHBoxLayout()
-        header.setSpacing(10)
+        if eyebrow:
+            tag = QLabel(eyebrow)
+            tag.setObjectName("cardEyebrow")
+            outer.addWidget(tag)
+
         title_label = QLabel(title)
         title_label.setObjectName("cardTitle")
-        header.addWidget(title_label)
+        outer.addWidget(title_label)
+
         if hint:
             hint_label = QLabel(hint)
             hint_label.setObjectName("cardHint")
-            header.addWidget(hint_label)
-        header.addStretch(1)
-        outer.addLayout(header)
+            hint_label.setWordWrap(True)
+            outer.addWidget(hint_label)
 
         divider = QFrame()
         divider.setObjectName("cardDivider")
@@ -404,7 +640,12 @@ class MainWindow(QMainWindow):
         body = QVBoxLayout()
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(12)
-        outer.addLayout(body)
+        # Stretch 1: when a card is taller than its content (the settings stack
+        # stretches every page to the window height), the body absorbs the
+        # slack. Without it Qt spreads the extra height over the header row
+        # too, which floats the title into the middle of the card and pushes
+        # the divider down with it.
+        outer.addLayout(body, 1)
         return card, body
 
     def _make_form(self) -> QFormLayout:
@@ -430,54 +671,221 @@ class MainWindow(QMainWindow):
         return label
 
     def _build_settings_tab(self) -> QWidget:
-        scroll, layout = self._make_scroll_page()
+        """Two-column settings: left nav rail, right detail page.
 
-        device_card, device_body = self._make_card("推理设备", "启动时自动检测")
-        device_form = self._make_form()
-        device_form.addRow(
+        Previously a single scrolling card stack — that hid the structure
+        when the page grew. The new layout matches the comparison page's
+        "one page, no scrolling" idiom while letting the user jump to a
+        specific subsection without hunting through long scrolling content.
+        """
+        page = QWidget()
+        page.setObjectName("pageBody")
+        outer = QHBoxLayout(page)
+        outer.setContentsMargins(2, 2, 8, 2)
+        outer.setSpacing(14)
+
+        self.settings_nav = QListWidget()
+        self.settings_nav.setObjectName("settingsNav")
+        self.settings_nav.setFrameShape(QFrame.Shape.NoFrame)
+        self.settings_nav.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
+        self.settings_nav.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.settings_nav.setUniformItemSizes(True)
+        self.settings_nav.setFixedWidth(200)
+        nav_items = ("推理设备", "外观", "自定义模型", "关于")
+        for title in nav_items:
+            item = QListWidgetItem(title)
+            item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter)
+            self.settings_nav.addItem(item)
+        self.settings_nav.setCurrentRow(0)
+        outer.addWidget(self.settings_nav)
+
+        # Right: a stacked widget holding one detail card per nav item.
+        stack = QStackedWidget()
+        stack.addWidget(self._build_settings_device_card())
+        stack.addWidget(self._build_settings_appearance_card())
+        stack.addWidget(self._build_settings_import_card())
+        stack.addWidget(self._build_settings_about_card())
+        self.settings_stack = stack
+        self.settings_nav.currentRowChanged.connect(stack.setCurrentIndex)
+        outer.addWidget(stack, 1)
+        return page
+
+    def _build_settings_device_card(self) -> QWidget:
+        card, body = self._make_card(
+            "推理设备",
+            "启动时自动检测",
+            eyebrow="Device",
+        )
+        form = self._make_form()
+        form.addRow(
             self._form_label("显卡厂商"),
             self._value_label(ui_logic.VENDOR_LABELS.get(self.gpu.vendor, "未知厂商")),
         )
-        device_form.addRow(
+        form.addRow(
             self._form_label("显卡型号"),
             self._value_label(self.gpu.name, strong=True),
         )
-        device_form.addRow(
+        form.addRow(
             self._form_label("独立显存"),
             self._value_label(f"{self.gpu.dedicated_vram_gb:.1f} GB"),
         )
-        device_form.addRow(
+        form.addRow(
             self._form_label("可用后端"),
             self._value_label(self._available_backend_text(), strong=True),
         )
-        device_body.addLayout(device_form)
-        layout.addWidget(device_card)
+        body.addLayout(form)
+        return card
 
-        import_card, import_body = self._make_card(
+    def _build_settings_appearance_card(self) -> QWidget:
+        card, body = self._make_card(
+            "外观",
+            "跟随系统可自动切换；切换立刻生效",
+            eyebrow="Appearance",
+        )
+        form = self._make_form()
+        form.addRow(self._form_label("主题"), self._build_theme_switcher())
+        hint = QLabel(
+            "浅色 / 深色：自定义当前外观。跟随系统：与 Windows 设置一致。"
+        )
+        hint.setObjectName("mutedLabel")
+        hint.setWordWrap(True)
+        body.addLayout(form)
+        body.addWidget(hint)
+        return card
+
+    def _build_settings_import_card(self) -> QWidget:
+        card, body = self._make_card(
             "自定义模型",
             "导入 ONNX 模型后可在此后各任务中选用",
+            eyebrow="Custom Models",
         )
-        self.import_model_button = QPushButton("导入 ONNX 模型到模型库")
+        self.import_model_button = GlassButton("导入 ONNX 模型到模型库")
         self.import_model_button.setObjectName("softButton")
         self.import_model_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.import_model_button.clicked.connect(self._import_custom_model)
         self.import_model_status = QLabel("尚未导入自定义模型")
         self.import_model_status.setObjectName("mutedLabel")
         self.import_model_status.setWordWrap(True)
-        import_body.addWidget(self.import_model_button, 0, Qt.AlignmentFlag.AlignLeft)
-        import_body.addWidget(self.import_model_status)
-        layout.addWidget(import_card)
+        body.addWidget(self.import_model_button, 0, Qt.AlignmentFlag.AlignLeft)
+        body.addWidget(self.import_model_status)
+        return card
 
-        about_card, about_body = self._make_card("关于")
+    def _build_settings_about_card(self) -> QWidget:
+        card, body = self._make_card("关于", eyebrow="About")
         for text in (
             "推理后端：ONNX Runtime（CUDA / DirectML / OpenVINO）与 ncnn Vulkan",
             "视频编码：内置 ffmpeg，支持 H.264 / HEVC 硬件编码",
             "隐私：全部处理在本地完成，不联网、不上传素材",
         ):
-            about_body.addWidget(self._value_label(text))
-        layout.addWidget(about_card)
-        layout.addStretch(1)
-        return scroll
+            body.addWidget(self._value_label(text))
+        return card
+
+    def _build_theme_switcher(self) -> QWidget:
+        """Three segmented buttons — 系统 / 浅色 / 深色 — wired to the active mode."""
+        row = QWidget()
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(6)
+        self._theme_buttons: dict[str, QPushButton] = {}
+        self._theme_group = QButtonGroup(self)
+        self._theme_group.setExclusive(True)
+        for label, mode, hint in (
+            ("跟随系统", "system", "与 Windows 的浅色 / 深色设置保持一致"),
+            ("浅色", "light", "始终使用浅色外观"),
+            ("深色", "dark", "始终使用深色外观"),
+        ):
+            button = GlassButton(label)
+            button.setObjectName("segmentButton")
+            button.setCheckable(True)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            button.setToolTip(f"{hint}（Ctrl+T 循环切换）")
+            button.clicked.connect(lambda _checked=False, m=mode: self._set_theme_mode(m))
+            self._theme_group.addButton(button)
+            self._theme_buttons[mode] = button
+            row_layout.addWidget(button)
+        row_layout.addStretch(1)
+        self._refresh_theme_switcher()
+        return row
+
+    def _refresh_theme_switcher(self) -> None:
+        """Sync the segmented buttons to the current effective mode choice."""
+        buttons = getattr(self, "_theme_buttons", None)
+        if not buttons:
+            return
+        active = self._theme_mode
+        for mode, button in buttons.items():
+            button.blockSignals(True)
+            button.setChecked(mode == active)
+            button.blockSignals(False)
+
+    def _set_theme_mode(self, mode: str) -> None:
+        """Persist a new theme choice and apply it on the spot."""
+        if mode not in ("system", "light", "dark") or mode == self._theme_mode:
+            return
+        self._theme_mode = mode
+        self._apply_window_theme()
+        self._refresh_theme_switcher()
+        self._settings["theme_mode"] = mode
+        save_settings(self._settings)
+
+    def _apply_window_theme(self) -> None:
+        """Apply ``self._theme_mode`` to the whole application.
+
+        ``apply_app_theme`` swaps the stylesheet, palace and font and then
+        re-polishes every live widget, so the change is visible immediately —
+        no restart, and no half-themed window.
+        """
+        app = QApplication.instance()
+        if app is None:
+            return
+        theme.apply_app_theme(app, self._theme_mode)
+        # The backdrop caches its mesh in a pixmap; drop it (it also keys on
+        # the mode, but the explicit invalidate keeps the intent obvious).
+        root = self.centralWidget()
+        if isinstance(root, BackdropWidget):
+            root.invalidate()
+        self._refresh_theme_dependent_views()
+        self.update()
+
+    def _refresh_theme_dependent_views(self) -> None:
+        """Hand-repaint everything the stylesheet's repolish cannot reach.
+
+        Custom paintEvent code and QTextDocument formats keep their own colours:
+        the log panel bakes a colour per line, and the comparison canvas draws
+        its image layers into cached pixmaps. Both would otherwise stay in the
+        previous theme until the user resets them.
+        """
+        for log_panel in (
+            getattr(self, "image_log", None),
+            getattr(self, "video_log", None),
+        ):
+            if log_panel is not None:
+                log_panel.recolour()
+        Toast.refresh_all()
+        view = getattr(self, "image_compare_view", None)
+        if view is not None:
+            view.refresh_theme()
+
+    def _sync_theme_for_resolved(self, resolved: str) -> None:
+        """Hook for main.py when the OS flips between light and dark.
+
+        Only meaningful while the user is on "system"; an explicit choice is
+        left alone.
+        """
+        if self._theme_mode != "system":
+            return
+        app = QApplication.instance()
+        if app is None:
+            return
+        # Rebuild the stylesheet too — the QSS tokens differ per mode, so
+        # updating the cached colour alone would leave the old theme painted.
+        theme.apply_app_theme(app, "system", resolved=resolved)
+        root = self.centralWidget()
+        if isinstance(root, BackdropWidget):
+            root.invalidate()
+        self._refresh_theme_dependent_views()
+        self.update()
 
     def _available_backend_text(self) -> str:
         labels = [
@@ -490,18 +898,30 @@ class MainWindow(QMainWindow):
     def _build_image_tab(self) -> QWidget:
         scroll, layout = self._make_scroll_page()
 
-        input_card, input_body = self._make_card("输入图片", "支持 jpg / png / webp，可批量加入")
-        self.image_list = QListWidget()
-        self.image_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
-        self.image_list.setMinimumHeight(150)
+        input_card, input_body = self._make_card(
+            "输入图片",
+            "支持 jpg / png / webp，可批量加入；可拖入文件或文件夹",
+            eyebrow="01 · Inputs",
+        )
+        self.image_list = ImageThumbnailList()
+        self.image_list.paths_dropped.connect(self._add_image_paths)
         input_buttons = QHBoxLayout()
         input_buttons.setSpacing(8)
-        self.image_add_files_button = QPushButton("添加文件")
+        self.image_add_files_button = GlassButton("添加文件")
         self.image_add_files_button.setObjectName("softButton")
-        self.image_add_folder_button = QPushButton("添加文件夹")
+        self.image_add_files_button.setIcon(icons_mod.icon("plus", 16))
+        self.image_add_files_button.setIconSize(QSize(16, 16))
+        self.image_add_files_button.setToolTip("选择一张或多张图片加入列表")
+        self.image_add_folder_button = GlassButton("添加文件夹")
         self.image_add_folder_button.setObjectName("softButton")
-        self.image_remove_button = QPushButton("移除选中")
+        self.image_add_folder_button.setIcon(icons_mod.icon("folder-plus", 16))
+        self.image_add_folder_button.setIconSize(QSize(16, 16))
+        self.image_add_folder_button.setToolTip("递归收集文件夹内的 jpg / png / webp")
+        self.image_remove_button = GlassButton("移除选中")
         self.image_remove_button.setObjectName("ghostButton")
+        self.image_remove_button.setIcon(icons_mod.icon("close", 16))
+        self.image_remove_button.setIconSize(QSize(16, 16))
+        self.image_remove_button.setToolTip("从列表移除选中项（不会删除文件）")
         self.image_add_files_button.clicked.connect(self._add_image_files)
         self.image_add_folder_button.clicked.connect(self._add_image_folder)
         self.image_remove_button.clicked.connect(self._remove_selected_images)
@@ -522,6 +942,7 @@ class MainWindow(QMainWindow):
         model_card, model_body = self._make_card(
             "模型与后端",
             "场景预设自动匹配模型；降噪模型可选独立降噪网络，留空则用内置边缘保持降噪",
+            eyebrow="02 · Model",
         )
         self.image_scale_selector = ScaleSelector()
         self.image_model_selector = ModelSelector(
@@ -532,7 +953,9 @@ class MainWindow(QMainWindow):
         model_body.addWidget(self.image_model_selector)
         layout.addWidget(model_card)
 
-        output_card, output_body = self._make_card("输出与画质")
+        output_card, output_body = self._make_card(
+            "输出与画质", eyebrow="03 · Output"
+        )
         output_form = self._make_form()
         self.image_output_dir_edit = QLineEdit(str(ui_logic.app_root() / "output"))
         output_row = QWidget()
@@ -540,7 +963,7 @@ class MainWindow(QMainWindow):
         output_layout.setContentsMargins(0, 0, 0, 0)
         output_layout.setSpacing(8)
         output_layout.addWidget(self.image_output_dir_edit, 1)
-        self.image_output_button = QPushButton("浏览")
+        self.image_output_button = GlassButton("浏览")
         self.image_output_button.setObjectName("softButton")
         self.image_output_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.image_output_button.clicked.connect(self._browse_image_output)
@@ -552,7 +975,7 @@ class MainWindow(QMainWindow):
         self.image_resize_mode_combo.addItem(
             "按百分比等比例缩放（相对超分结果）", "percent"
         )
-        self.image_resize_percent_spin = QSpinBox()
+        self.image_resize_percent_spin = PlusMinusSpinBox()
         self.image_resize_percent_spin.setRange(
             _PERCENT_MIN, _PERCENT_MAX
         )
@@ -588,8 +1011,10 @@ class MainWindow(QMainWindow):
         output_body.addLayout(output_form)
         layout.addWidget(output_card)
 
-        run_card, run_body = self._make_card("任务", "运行中可随时取消")
-        self.image_progress = QProgressBar()
+        run_card, run_body = self._make_card(
+            "任务", "运行中可随时取消", eyebrow="04 · Run"
+        )
+        self.image_progress = GlassProgressBar()
         self.image_progress.setRange(0, 1000)
         self.image_progress.setValue(0)
         self.image_progress.setTextVisible(False)
@@ -597,13 +1022,21 @@ class MainWindow(QMainWindow):
         self.image_status.setObjectName("statusLabel")
         controls = QHBoxLayout()
         controls.setSpacing(8)
-        self.image_start_button = QPushButton("开始超分")
+        self.image_start_button = GlassButton("开始超分")
         self.image_start_button.setObjectName("primaryButton")
         self.image_start_button.setMinimumWidth(118)
         self.image_start_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.image_cancel_button = QPushButton("取消")
+        self.image_start_button.setIcon(
+            icons_mod.icon("play", 16, colours=icons_mod.on_accent_colours())
+        )
+        self.image_start_button.setIconSize(QSize(16, 16))
+        self.image_start_button.setToolTip("开始超分（Ctrl+Enter）")
+        self.image_cancel_button = GlassButton("取消")
         self.image_cancel_button.setObjectName("cancelButton")
+        self.image_cancel_button.setIcon(icons_mod.icon("pause", 16))
+        self.image_cancel_button.setIconSize(QSize(16, 16))
         self.image_cancel_button.setEnabled(False)
+        self.image_cancel_button.setToolTip("取消当前任务（Esc）")
         controls.addWidget(self.image_status, 1)
         controls.addWidget(self.image_cancel_button)
         controls.addWidget(self.image_start_button)
@@ -634,10 +1067,11 @@ class MainWindow(QMainWindow):
         card, body = self._make_card(
             "对比预览",
             "单张图片任务完成后自动载入；批量为逐张输出，不逐个对照",
+            eyebrow="Before · After",
         )
         self.image_compare_panel = compare_view.ComparisonPanel()
         self.image_compare_panel.add_action(
-            self._compare_button("适应窗口", self.image_compare_view_fit)
+            self._compare_button("适应窗口", self.image_compare_view_fit, "fit")
         )
         self.image_compare_panel.add_action(
             self._compare_button("1:1 像素", self.image_compare_view_pixels)
@@ -662,15 +1096,20 @@ class MainWindow(QMainWindow):
     def _build_video_tab(self) -> QWidget:
         scroll, layout = self._make_scroll_page()
 
-        input_card, input_body = self._make_card("输入视频", ui_logic.video_8bit_notice())
+        input_card, input_body = self._make_card(
+            "输入视频",
+            ui_logic.video_8bit_notice(),
+            eyebrow="01 · Input",
+        )
         input_form = self._make_form()
         self.video_input_edit = QLineEdit()
+        self.video_input_edit.textChanged.connect(self._refresh_video_meta)
         video_input_row = QWidget()
         video_input_layout = QHBoxLayout(video_input_row)
         video_input_layout.setContentsMargins(0, 0, 0, 0)
         video_input_layout.setSpacing(8)
         video_input_layout.addWidget(self.video_input_edit, 1)
-        self.video_input_button = QPushButton("浏览")
+        self.video_input_button = GlassButton("浏览")
         self.video_input_button.setObjectName("softButton")
         self.video_input_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.video_input_button.clicked.connect(self._browse_video_input)
@@ -682,7 +1121,7 @@ class MainWindow(QMainWindow):
         video_output_layout.setContentsMargins(0, 0, 0, 0)
         video_output_layout.setSpacing(8)
         video_output_layout.addWidget(self.video_output_dir_edit, 1)
-        self.video_output_button = QPushButton("浏览")
+        self.video_output_button = GlassButton("浏览")
         self.video_output_button.setObjectName("softButton")
         self.video_output_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.video_output_button.clicked.connect(self._browse_video_output)
@@ -691,11 +1130,21 @@ class MainWindow(QMainWindow):
         input_form.addRow(self._form_label("视频文件"), video_input_row)
         input_form.addRow(self._form_label("输出目录"), video_output_row)
         input_body.addLayout(input_form)
+
+        # Inline metadata preview: a translucent row underneath the form so the
+        # user sees width × height · fps · frames · duration · codec before
+        # starting. ``_refresh_video_meta`` populates this asynchronously.
+        self.video_meta_label = QLabel("请先选择视频")
+        self.video_meta_label.setObjectName("videoMetaLabel")
+        self.video_meta_label.setWordWrap(True)
+        input_body.addWidget(self.video_meta_label)
+
         layout.addWidget(input_card)
 
         model_card, model_body = self._make_card(
             "模型与后端",
             "逐帧超分，模型与图片任务共用；降噪模型可独立选择",
+            eyebrow="02 · Model",
         )
         self.video_scale_selector = ScaleSelector()
         self.video_model_selector = ModelSelector(
@@ -706,7 +1155,9 @@ class MainWindow(QMainWindow):
         model_body.addWidget(self.video_model_selector)
         layout.addWidget(model_card)
 
-        output_card, output_body = self._make_card("输出与编码")
+        output_card, output_body = self._make_card(
+            "输出与编码", eyebrow="03 · Encode"
+        )
         output_form = self._make_form()
         self.video_codec_combo = ChevronComboBox()
         for codec, label in VIDEO_CODEC_OPTIONS:
@@ -718,8 +1169,10 @@ class MainWindow(QMainWindow):
         output_body.addLayout(output_form)
         layout.addWidget(output_card)
 
-        run_card, run_body = self._make_card("任务", "运行中可随时取消")
-        self.video_progress = QProgressBar()
+        run_card, run_body = self._make_card(
+            "任务", "运行中可随时取消", eyebrow="04 · Run"
+        )
+        self.video_progress = GlassProgressBar()
         self.video_progress.setRange(0, 1000)
         self.video_progress.setValue(0)
         self.video_progress.setTextVisible(False)
@@ -727,13 +1180,21 @@ class MainWindow(QMainWindow):
         self.video_status.setObjectName("statusLabel")
         controls = QHBoxLayout()
         controls.setSpacing(8)
-        self.video_start_button = QPushButton("开始超分")
+        self.video_start_button = GlassButton("开始超分")
         self.video_start_button.setObjectName("primaryButton")
         self.video_start_button.setMinimumWidth(118)
         self.video_start_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.video_cancel_button = QPushButton("取消")
+        self.video_start_button.setIcon(
+            icons_mod.icon("play", 16, colours=icons_mod.on_accent_colours())
+        )
+        self.video_start_button.setIconSize(QSize(16, 16))
+        self.video_start_button.setToolTip("开始逐帧超分与硬件编码（Ctrl+Enter）")
+        self.video_cancel_button = GlassButton("取消")
         self.video_cancel_button.setObjectName("cancelButton")
+        self.video_cancel_button.setIcon(icons_mod.icon("pause", 16))
+        self.video_cancel_button.setIconSize(QSize(16, 16))
         self.video_cancel_button.setEnabled(False)
+        self.video_cancel_button.setToolTip("取消当前任务（Esc）")
         controls.addWidget(self.video_status, 1)
         controls.addWidget(self.video_cancel_button)
         controls.addWidget(self.video_start_button)
@@ -902,7 +1363,11 @@ class MainWindow(QMainWindow):
                     f"已导入并注册：{meta.name} / {meta.model_path}"
                 )
             except Exception as exc:
-                QMessageBox.warning(self, "导入失败", str(exc))
+                toast_mod.notify(
+                    self,
+                    f"导入失败：{exc}",
+                    kind="error",
+                )
 
     def _add_image_files(self) -> None:
         paths, _ = QFileDialog.getOpenFileNames(
@@ -922,6 +1387,10 @@ class MainWindow(QMainWindow):
     def _add_image_paths(self, paths: Sequence[str]) -> None:
         files = ui_logic.collect_image_files(paths)
         existing = self._image_path_set()
+        new_rows: list[int] = []
+        # Snapshot the row count first so the indices refer to items added in
+        # this call only (and so the cascade only animates the new arrivals).
+        first_row = self.image_list.count()
         for path in files:
             if path in existing:
                 continue
@@ -930,6 +1399,9 @@ class MainWindow(QMainWindow):
             item.setData(Qt.ItemDataRole.UserRole, str(path))
             self.image_list.addItem(item)
             existing.add(path)
+            new_rows.append(first_row + len(new_rows))
+        if new_rows:
+            stagger_list_items(self.image_list, new_rows)
         if not files and paths:
             self.image_log.append("Warning", "未找到 jpg/png/webp 图片")
         self.image_status.setText(f"已添加 {self.image_list.count()} 张图片")
@@ -995,17 +1467,106 @@ class MainWindow(QMainWindow):
         )
         if path:
             self.video_input_edit.setText(path)
+            self._refresh_video_meta()
 
     def _browse_video_output(self) -> None:
         folder = QFileDialog.getExistingDirectory(self, "选择视频输出目录")
         if folder:
             self.video_output_dir_edit.setText(folder)
 
-    def _set_progress_color(self, bar: QProgressBar, color: str) -> None:
-        bar.setStyleSheet(_PROGRESS_CHUNK_QSS % color)
+    def _refresh_video_meta(self, *_unused) -> None:
+        """Probe the selected video and render its metadata under the form.
 
-    def _reset_progress_color(self, bar: QProgressBar) -> None:
-        bar.setStyleSheet("")
+        ``probe_video`` has a 30s timeout inside ``ffmpeg_utils`` so we still
+        defer it through ``QTimer.singleShot(0, …)`` to give the file dialog
+        a chance to dismiss cleanly on the first selection.
+        """
+        label = getattr(self, "video_meta_label", None)
+        if label is None:
+            return
+        edit = getattr(self, "video_input_edit", None)
+        if edit is None:
+            return
+        text = edit.text().strip()
+        if not text:
+            label.setText("请先选择视频")
+            label.setProperty("state", "placeholder")
+            self._restyle_meta_label()
+            return
+        path = ui_logic.resolve_project_path(text)
+        if not path.is_file():
+            label.setText(f"未找到文件：{path}")
+            label.setProperty("state", "danger")
+            self._restyle_meta_label()
+            return
+
+        def _run() -> None:
+            try:
+                info = probe_video(path)
+            except Exception as exc:  # timeout, bad stream, missing ffmpeg
+                label.setText(f"无法读取视频信息：{exc}")
+                label.setProperty("state", "danger")
+                self._restyle_meta_label()
+                return
+            self._apply_video_meta(info)
+
+        QTimer.singleShot(0, _run)
+
+    def _apply_video_meta(self, info: dict) -> None:
+        label = self.video_meta_label
+        parts: list[str] = []
+        width = info.get("width")
+        height = info.get("height")
+        if width and height:
+            parts.append(f"{int(width)}×{int(height)}")
+        fps = info.get("fps")
+        if fps:
+            parts.append(f"{float(fps):.2f} fps")
+        total = info.get("total_frames")
+        if total:
+            parts.append(f"{int(total)} 帧")
+        duration = info.get("duration")
+        if duration and duration > 0:
+            parts.append(_format_duration(float(duration)))
+        pix_fmt = info.get("pix_fmt")
+        if pix_fmt:
+            parts.append(pix_fmt)
+        if not parts:
+            label.setText("无法解析视频元信息")
+            label.setProperty("state", "danger")
+        else:
+            label.setText("  ·  ".join(parts))
+            label.setProperty("state", "ok")
+        self._restyle_meta_label()
+
+    def _restyle_meta_label(self) -> None:
+        # Bumps the dynamic ``state`` property into QSS selectors so the colour
+        # flips between muted / accent / danger without rebuilding the
+        # global stylesheet.
+        label = self.video_meta_label
+        style = label.style()
+        style.unpolish(label)
+        style.polish(label)
+        label.update()
+
+    def _set_progress_color(self, bar: GlassProgressBar, color_name: str) -> None:
+        """Switch the progress-bar chunk palette by semantic state name.
+
+        The actual chunk gradient is now painted by ``GlassProgressBar`` itself;
+        we just tell it which colour family to use. The ``color_name`` argument
+        accepts the same labels (``success`` / ``error`` / ``warning`` /
+        ``cancelled``) the task layer has always passed.
+        """
+        try:
+            bar.set_state(color_name)
+        except ValueError:
+            bar.set_state("normal")
+
+    def _reset_progress_color(self, bar: GlassProgressBar) -> None:
+        try:
+            bar.set_state("normal")
+        except ValueError:
+            return
 
     def _reset_image_progress(self) -> None:
         self.image_progress.setRange(0, 1000)
@@ -1019,20 +1580,20 @@ class MainWindow(QMainWindow):
 
     def start_image_upscale(self) -> None:
         if self._task_busy():
-            QMessageBox.information(self, "任务进行中", "请等待当前任务结束后再开始新任务")
+            toast_mod.notify(self, "任务进行中，请等待结束后再开始新任务", kind="info")
             return
         paths = self._image_paths()
         if not paths:
-            QMessageBox.warning(self, "缺少输入", "请先添加至少一张图片")
+            toast_mod.notify(self, "请先添加至少一张图片", kind="warning")
             return
         out_dir_text = self.image_output_dir_edit.text().strip()
         if not out_dir_text:
-            QMessageBox.warning(self, "缺少输出目录", "请选择图片输出目录")
+            toast_mod.notify(self, "请选择图片输出目录", kind="warning")
             return
 
         model_path = self.image_model_selector.current_model_path()
         if not model_path.is_file():
-            QMessageBox.warning(self, "模型不存在", f"未找到模型文件：\n{model_path}")
+            toast_mod.notify(self, f"未找到模型文件：\n{model_path}", kind="error")
             return
 
         requested_scale = self.image_scale_selector.scale()
@@ -1103,26 +1664,26 @@ class MainWindow(QMainWindow):
 
     def start_video_upscale(self) -> None:
         if self._task_busy():
-            QMessageBox.information(self, "任务进行中", "请等待当前任务结束后再开始新任务")
+            toast_mod.notify(self, "任务进行中，请等待结束后再开始新任务", kind="info")
             return
         input_text = self.video_input_edit.text().strip()
         if not input_text:
-            QMessageBox.warning(self, "缺少输入", "请选择一条视频文件")
+            toast_mod.notify(self, "请选择一条视频文件", kind="warning")
             return
         input_path = ui_logic.resolve_project_path(input_text)
         if not input_path.is_file():
-            QMessageBox.warning(self, "文件不存在", f"未找到视频文件：\n{input_path}")
+            toast_mod.notify(self, f"未找到视频文件：\n{input_path}", kind="error")
             return
         out_dir_text = self.video_output_dir_edit.text().strip()
         if not out_dir_text:
-            QMessageBox.warning(self, "缺少输出目录", "请选择视频输出目录")
+            toast_mod.notify(self, "请选择视频输出目录", kind="warning")
             return
         out_dir = ui_logic.resolve_project_path(out_dir_text)
         out_dir.mkdir(parents=True, exist_ok=True)
 
         model_path = self.video_model_selector.current_model_path()
         if not model_path.is_file():
-            QMessageBox.warning(self, "模型不存在", f"未找到模型文件：\n{model_path}")
+            toast_mod.notify(self, f"未找到模型文件：\n{model_path}", kind="error")
             return
 
         requested_scale = self.video_scale_selector.scale()
@@ -1134,10 +1695,10 @@ class MainWindow(QMainWindow):
         out_path = out_dir / f"{input_path.stem}_x{scale}.mp4"
 
         if out_path.exists() and not self.video_overwrite_check.isChecked():
-            QMessageBox.warning(
+            toast_mod.notify(
                 self,
-                "输出已存在",
                 f"输出文件已存在，请勾选覆盖或更换目录：\n{out_path}",
+                kind="warning",
             )
             return
 
@@ -1215,8 +1776,8 @@ class MainWindow(QMainWindow):
     def _on_image_runtime(self, label: str) -> None:
         self.image_log.append("Info", f"实际推理后端：{label}")
 
-    def _compare_button(self, text: str, slot) -> QPushButton:
-        return compare_view.ghost_button(text, slot)
+    def _compare_button(self, text: str, slot, icon_name: Optional[str] = None) -> QPushButton:
+        return compare_view.ghost_button(text, slot, icon_name=icon_name)
 
     def _on_image_log(self, level: str, message: str) -> None:
         """Step log lines produced by the pipeline (decode / tiles / encode)."""
@@ -1444,11 +2005,11 @@ class MainWindow(QMainWindow):
         self.image_progress.setRange(0, 1000)
         self.image_progress.setValue(1000 if results else 0)
         if results and fail_count == 0:
-            self._set_progress_color(self.image_progress, _PROGRESS_COLOR_SUCCESS)
+            self._set_progress_color(self.image_progress, _PROGRESS_STATE_SUCCESS)
         elif ok_count == 0:
-            self._set_progress_color(self.image_progress, _PROGRESS_COLOR_ERROR)
+            self._set_progress_color(self.image_progress, _PROGRESS_STATE_ERROR)
         else:
-            self._set_progress_color(self.image_progress, _PROGRESS_COLOR_PARTIAL)
+            self._set_progress_color(self.image_progress, _PROGRESS_STATE_PARTIAL)
         self.image_status.setText(
             f"完成：成功 {ok_count} / 失败 {fail_count}"
         )
@@ -1480,7 +2041,7 @@ class MainWindow(QMainWindow):
         self._set_image_running(False)
         self.image_progress.setRange(0, 1000)
         self.image_progress.setValue(0)
-        self._set_progress_color(self.image_progress, _PROGRESS_COLOR_ERROR)
+        self._set_progress_color(self.image_progress, _PROGRESS_STATE_ERROR)
         self.image_status.setText("处理失败")
         self.image_log.append("Error", message)
         self._cleanup_image_worker()
@@ -1489,7 +2050,7 @@ class MainWindow(QMainWindow):
         self._set_image_running(False)
         self.image_progress.setRange(0, 1000)
         self.image_progress.setValue(0)
-        self._set_progress_color(self.image_progress, _PROGRESS_COLOR_CANCELLED)
+        self._set_progress_color(self.image_progress, _PROGRESS_STATE_CANCELLED)
         self.image_status.setText("已取消")
         self.image_log.append("Warning", "任务已取消")
         self._cleanup_image_worker()
@@ -1498,7 +2059,7 @@ class MainWindow(QMainWindow):
         self._set_video_running(False)
         self.video_progress.setRange(0, 1000)
         self.video_progress.setValue(1000)
-        self._set_progress_color(self.video_progress, _PROGRESS_COLOR_SUCCESS)
+        self._set_progress_color(self.video_progress, _PROGRESS_STATE_SUCCESS)
         self.video_status.setText("完成")
         elapsed = float(getattr(result, "elapsed_seconds", 0.0) or 0.0)
         self.video_log.append(
@@ -1512,7 +2073,7 @@ class MainWindow(QMainWindow):
         self._set_video_running(False)
         self.video_progress.setRange(0, 1000)
         self.video_progress.setValue(0)
-        self._set_progress_color(self.video_progress, _PROGRESS_COLOR_ERROR)
+        self._set_progress_color(self.video_progress, _PROGRESS_STATE_ERROR)
         self.video_status.setText("处理失败")
         self.video_log.append("Error", message)
         self._cleanup_video_worker()
@@ -1521,7 +2082,7 @@ class MainWindow(QMainWindow):
         self._set_video_running(False)
         self.video_progress.setRange(0, 1000)
         self.video_progress.setValue(0)
-        self._set_progress_color(self.video_progress, _PROGRESS_COLOR_CANCELLED)
+        self._set_progress_color(self.video_progress, _PROGRESS_STATE_CANCELLED)
         self.video_status.setText("已取消")
         self.video_log.append("Warning", "任务已取消")
         self._cleanup_video_worker()
@@ -1583,4 +2144,23 @@ class MainWindow(QMainWindow):
 
     def _apply_style(self) -> None:
         self.setFont(QFont(theme.UI_FONT_FAMILY, theme.UI_FONT_POINT_SIZE))
-        self.setStyleSheet(theme.APP_STYLESHEET)
+        self._apply_window_theme()
+        self._refresh_theme_switcher()
+
+
+def _format_duration(seconds: float) -> str:
+    """Format a number of seconds as ``HH:MM:SS`` or ``MM:SS`` if shorter.
+
+    Lives at module scope on purpose: a 0-indent ``def`` inside the
+    ``MainWindow`` class body would terminate the class there and every
+    later ``MainWindow`` method would silently drop out of the class
+    object.
+    """
+    if seconds < 0:
+        return ""
+    total = int(round(seconds))
+    hours, rem = divmod(total, 3600)
+    minutes, secs = divmod(rem, 60)
+    if hours:
+        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+    return f"{minutes:02d}:{secs:02d}"

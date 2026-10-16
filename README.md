@@ -7,7 +7,7 @@
 ![Platform](https://img.shields.io/badge/Platform-Windows%2010%20%2F%2011%20x64-0078D6?logo=windows&logoColor=white)
 ![UI](https://img.shields.io/badge/UI-PySide6%206.12-41CD52?logo=qt&logoColor=white)
 ![Runtime](https://img.shields.io/badge/Inference-ONNX%20Runtime%20%28DirectML%20%2F%20CUDA%29-005CED)
-![Tests](https://img.shields.io/badge/Tests-221%20passed-success)
+![Tests](https://img.shields.io/badge/Tests-257%20passed-success)
 ![License](https://img.shields.io/badge/License-MIT-blue)
 
 ---
@@ -54,6 +54,8 @@
 | 用 GPU 说话 | 启动即枚举显卡，**没有独显直接拒绝启动**（这是设计行为，不是故障） |
 | 过程可解释 | 解码 / 设置 / 每 N 块推理与剩余时间 / 后处理 / 编码逐步落日志，终端与界面同源 |
 | 不牺牲保真换速度 | 提速手段都以"新旧输出逐像素差 ≤ 1 级"为前提验证后才采用（见[性能](#性能)） |
+| 液态玻璃界面 | 半透明卡片 + 渐变背板 + 浅深色自适应（设置页或 `Ctrl+T` 切换，无需重启），卡片 hover 高光跟随光标、按钮按下涟漪、进度条多色流体、页面切换淡入淡出；导航与关键按钮使用自绘矢量图标，正文 / 提示文字在两种主题下均满足 WCAG AA 对比度（`4.5:1`），并有测试守住 |
+| 少打断的操作流 | 拖放图片 / 文件夹到列表即加入；空列表显示投放提示与支持格式；校验反馈走右下角浮动提示条而非弹窗；输出路径等必填项内联校验；`Ctrl+Enter` 开始、`Esc` 取消、`Ctrl+1-4` 切页 |
 
 **运行前提**：Windows 10 / 11 64 位 + NVIDIA / AMD / Intel 独立显卡（建议显存 ≥ 4 GB，SwinIR 系列建议 ≥ 6 GB）。
 
@@ -126,7 +128,7 @@
 - 分步运行日志：终端 + 轮转文件（4 MB × 3）+ 界面日志面板同源，`-v` 展开到每块 tile
 - 绿色免安装打包（PyInstaller one-dir，约 900 MB，内置 Python 运行时与全部依赖），
   自带无界面自检 `--headless`
-- 221 项自动化测试（含 DirectML 真机集成测试）与离屏 UI 渲染审计脚本
+- 257 项自动化测试（含 DirectML 真机集成测试）与离屏 UI 渲染审计脚本
 
 ---
 
@@ -364,7 +366,7 @@ super-resolution-tool/
 │   ├── core/                   环境检测、后端选择、推理引擎、分块、后处理、日志、设置
 │   ├── models/                 模型注册表、自定义导入、场景默认映射
 │   ├── pipelines/              图片管线、视频管线、FFmpeg 调用与探测
-│   └── ui/                     PySide6 界面：主窗口、对比画布、主题、控件、工作线程
+│   └── ui/                     PySide6 界面：主窗口、对比画布、主题令牌、自绘控件、矢量图标、提示条、工作线程
 ├── models/
 │   ├── onnx/                   14 个内置 ONNX 模型（*.onnx 未入库）
 │   └── LICENSES.md             模型来源与授权清单
@@ -372,7 +374,7 @@ super-resolution-tool/
 ├── scripts/
 │   ├── export_onnx.py          .pth → ONNX 导出（自动重映射社区 RRDB 键名）
 │   └── ui_preview.py           离屏渲染全部页面 + 布局/配色/主题程序化审计
-├── tests/                      221 项测试（pytest）
+├── tests/                      257 项测试（pytest）
 ├── docs/                       技术方案、模型导出笔记
 ├── SuperResolutionTool.spec    PyInstaller 打包配置
 ├── config.example.yaml         外部工具路径等可选配置示例
@@ -391,18 +393,20 @@ python scripts/ui_preview.py --out-dir D:\model_output\images --tag after
 python app/main.py --headless          # 端到端自检（模型 + DirectML + FFmpeg）
 ```
 
-测试分布（共 **221** 项）：
+测试分布（共 **257** 项）：
 
 | 领域 | 文件（用例数） |
 |---|---|
 | 对比预览 | `test_compare_view.py` (37)：几何映射、放大格定位与让位、光标锚定缩放、平移夹紧、设置往返 |
 | 图片管线 | `test_image_pipeline.py` (29)：命名、压缩档、尺寸策略、批量与取消、写盘回读 |
-| 推理引擎 | `test_sr_engine.py` (16)、`test_sr_engine_integration.py` (1, DirectML 真机) |
+| 推理引擎 | `test_sr_engine.py` (16)、`test_sr_engine_integration.py` (3, DirectML 真机) |
 | 分块与后处理 | `test_tiling.py` (11)、`test_postprocess.py` (7)、`test_denoise_routing.py` (9) |
 | 环境与后端 | `test_environment_checker.py` (13)、`test_backend_selector.py` (11)、`test_vulkan_engine.py` (6) |
 | 视频管线 | `test_video_pipeline.py` (6)、`test_video_pipeline_integration.py` (1, slow)、`test_ffmpeg_utils.py` (13) |
-| 界面与日志 | `test_ui_logic.py` (15)、`test_ui_progress.py` (13)、`test_model_selector.py` (5)、`test_task_log.py` (9)、`test_main.py` (4)、`test_theme.py` (2) |
-| 模型与导出 | `test_model_manager.py` (8)、`test_export_onnx.py` (5) |
+| 界面与日志 | `test_ui_logic.py` (15)、`test_ui_progress.py` (13)、`test_model_selector.py` (5)、`test_task_log.py` (9)、`test_main.py` (4) |
+| 主题与渲染 | `test_theme.py` (7)：两套主题结构一致、正文 / 提示 / 日志 / 状态色对比度 ≥ 4.5:1；`test_theme_switch.py` (5)：切换即时生效并写盘；`test_ui_themed_rendering.py` (6)：对比画布与日志面板跟随主题、被拉伸的卡片不飘标题、空列表有投放提示 |
+| 交互控件 | `test_toast_image_grid.py` (9)：提示条进 / 退场与堆叠、缩略图列表拖放；`test_shortcuts_and_validation.py` (7)：快捷键绑定与内联校验联动 |
+| 模型与导出 | `test_model_manager.py` (8)、`test_export_onnx.py` (7) |
 
 `scripts/ui_preview.py` 是无头环境下的界面回归网：把每个页面（含对比页的放大镜 / 滑块两种模式，
 用真实图片对驱动）渲染成 PNG，并程序化检查控件未塌陷、下拉箭头与微调按钮确实画出了像素、
