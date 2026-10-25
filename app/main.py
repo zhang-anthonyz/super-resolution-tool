@@ -10,6 +10,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from app.core.app_settings import load_settings
@@ -143,6 +144,8 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     app = QApplication.instance() or QApplication(args)
     app.setApplicationName("Super Resolution Tool")
+    # 窗口与任务栏图标；exe 文件本身的图标由 PyInstaller spec 的 icon= 嵌入。
+    app.setWindowIcon(QIcon(str(app_root() / "assets" / "app.ico")))
     saved = load_settings()
     saved_mode = saved.get("theme_mode", "system")
     if saved_mode not in ("system", "light", "dark"):
