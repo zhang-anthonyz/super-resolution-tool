@@ -15,6 +15,7 @@ onnx_models = [
 datas = [
     (str(project_root / "vendor" / "ffmpeg.exe"), "vendor"),
     (str(project_root / "vendor" / "ffprobe.exe"), "vendor"),
+    (str(project_root / "assets" / "app.ico"), "assets"),
 ] + onnx_models
 
 runtime_datas = [
@@ -87,6 +88,7 @@ exe = EXE(
     upx=True,
     contents_directory=".",
     console=False,
+    icon=str(project_root / "assets" / "app.ico"),
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
