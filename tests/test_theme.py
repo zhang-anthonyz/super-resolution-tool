@@ -138,3 +138,37 @@ def test_log_level_and_status_colours_clear_wcag_aa():
                 assert ratio >= AA_NORMAL, (
                     f"{mode} {role} {tokens[role]} on {surface} is {ratio:.2f}:1"
                 )
+
+
+PROGRESS_FILL_ROLES = (
+    "PROGRESS_NORMAL",
+    "PROGRESS_SUCCESS",
+    "PROGRESS_WARNING",
+    "PROGRESS_ERROR",
+    "PROGRESS_NEUTRAL",
+)
+
+
+def test_progress_tokens_exist_in_both_themes():
+    """The bar resolves its fill from theme tokens at paint time, so both
+    modes must expose the same PROGRESS_* keys."""
+    for mode in ("light", "dark"):
+        tokens = theme.tokens_for(mode)
+        for role in ("PROGRESS_TRACK", *PROGRESS_FILL_ROLES):
+            assert tokens[role].startswith("#"), f"{mode} missing {role}"
+
+
+def test_light_progress_fills_are_midtone_not_near_black():
+    """Regression net for the "green + black" light bar: fills must stay in a
+    mid luminance band — clearly visible on the track yet never reading as a
+    near-black stripe — and remain distinct from the track."""
+    tokens = theme.tokens_for("light")
+    for role in PROGRESS_FILL_ROLES:
+        luminance = _luminance(tokens[role])
+        assert 0.20 <= luminance <= 0.55, (
+            f"light {role} {tokens[role]} luminance {luminance:.3f} "
+            "is outside the mid-tone band"
+        )
+        assert contrast_ratio(tokens[role], tokens["PROGRESS_TRACK"]) >= 1.8, (
+            f"light {role} barely differs from the track"
+        )

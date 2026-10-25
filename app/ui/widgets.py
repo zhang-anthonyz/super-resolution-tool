@@ -469,6 +469,15 @@ GlassButton = RippleButton
 # === HairlineProgressBar ===================================================
 
 
+def _lighten(color: QColor, factor: float) -> QColor:
+    """Blend ``color`` toward white by ``factor`` (0 = unchanged, 1 = white)."""
+    return QColor(
+        int(round(color.red() + (255 - color.red()) * factor)),
+        int(round(color.green() + (255 - color.green()) * factor)),
+        int(round(color.blue() + (255 - color.blue()) * factor)),
+    )
+
+
 class HairlineProgressBar(QProgressBar):
     """Progress bar with a flowing sheen chunk and a 100% celebration.
 
@@ -487,15 +496,21 @@ class HairlineProgressBar(QProgressBar):
     SHIMMER_SPEED = 0.9
 
     #: Chunk colour families, keyed by state and resolved against the live
-    #: theme at paint time: a solid ``base`` with a brighter ``sheen`` band
-    #: sweeping across it.
-    STATE_TOKENS: dict[str, tuple[str, str]] = {
-        "normal": ("ACCENT", "ACCENT_LIGHT"),
-        "success": ("SUCCESS", "#86EFAC"),
-        "warning": ("WARNING", "#FCD34D"),
-        "error": ("DANGER", "#FCA5A5"),
-        "cancelled": ("NEUTRAL", "#A8B0BA"),
+    #: theme at paint time. Fills come from the medium-saturation PROGRESS_*
+    #: tokens (the text-safe ACCENT/SUCCESS… family reads almost black as a
+    #: fat fill); the sheen band is the fill lightened toward white, so it
+    #: stays in the same hue family in every state.
+    STATE_TOKENS: dict[str, str] = {
+        "normal": "PROGRESS_NORMAL",
+        "success": "PROGRESS_SUCCESS",
+        "warning": "PROGRESS_WARNING",
+        "error": "PROGRESS_ERROR",
+        "cancelled": "PROGRESS_NEUTRAL",
     }
+
+    #: How much the sheen lightens the fill, per mode. Kept low: the band is
+    #: a quiet ripple, not a mirror stripe.
+    SHEEN_LIGHTEN = {"light": 0.42, "dark": 0.30}
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -520,10 +535,11 @@ class HairlineProgressBar(QProgressBar):
         self._sync_animation()
         self.update()
 
-    def _chunk_palette(self) -> dict[str, str]:
-        base_token, sheen = self.STATE_TOKENS[self._state]
-        tokens = theme.tokens_for(theme.current_mode())
-        return {"base": tokens[base_token], "sheen": sheen}
+    def _chunk_palette(self) -> dict[str, QColor]:
+        mode = theme.current_mode()
+        tokens = theme.tokens_for(mode)
+        base = QColor(tokens[self.STATE_TOKENS[self._state]])
+        return {"base": base, "sheen": _lighten(base, self.SHEEN_LIGHTEN[mode])}
 
     def _animating(self) -> bool:
         """Whether the chunk is worth repainting 30 times a second."""
@@ -578,11 +594,7 @@ class HairlineProgressBar(QProgressBar):
         path = QPainterPath()
         path.addRoundedRect(rect, radius, radius)
         tokens = theme.tokens_for(theme.current_mode())
-        painter.fillPath(path, QColor(tokens["DIVIDER"]))
-
-    #: Width of one sheen band, in px. Fixed rather than proportional to the
-    #: chunk so the sweep keeps the same visual speed at every progress level.
-    SHEEN_PERIOD = 190.0
+        painter.fillPath(path, QColor(tokens["PROGRESS_TRACK"]))
 
     def _draw_chunk(self, painter: QPainter) -> None:
         span = self.maximum() - self.minimum()
@@ -602,13 +614,14 @@ class HairlineProgressBar(QProgressBar):
         chunk_path.addRoundedRect(chunk_rect, radius, radius)
 
         palette = self._chunk_palette()
-        base = QColor(palette["base"])
-        sheen = QColor(palette["sheen"])
+        base = palette["base"]
+        sheen = palette["sheen"]
 
         if self._animating():
-            phase = (self._phase * self.SHIMMER_SPEED) % self.SHEEN_PERIOD
+            period = self._sheen_period()
+            phase = (self._phase * self.SHIMMER_SPEED) % period
             gradient = QLinearGradient(
-                QPointF(chunk_rect.x() + phase - self.SHEEN_PERIOD,
+                QPointF(chunk_rect.x() + phase - period,
                         chunk_rect.center().y()),
                 QPointF(chunk_rect.x() + phase, chunk_rect.center().y()),
             )
@@ -625,6 +638,11 @@ class HairlineProgressBar(QProgressBar):
             flash = QColor(255, 255, 255)
             flash.setAlpha(max(0, int(96 * (1.0 - self._pulse_phase))))
             painter.fillPath(chunk_path, flash)
+
+    #: Width of one sheen band. At least one bar-width so a wide bar shows a
+    #: single quiet ripple instead of repeated mirror stripes.
+    def _sheen_period(self) -> float:
+        return max(260.0, float(self.width()))
 
 
 #: Public alias for callers that still import the old name.
