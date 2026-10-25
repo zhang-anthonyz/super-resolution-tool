@@ -67,7 +67,7 @@
 
 <img width="2560" height="1369" alt="图片超分页" src="https://github.com/user-attachments/assets/0d66d35d-b09d-4823-aae8-c06c11e7f36d" />
 
-一次实际任务：进度、分步运行日志与结果（Vulkan 后端，输出为 4x 的 50% 百分比缩放）
+一次实际任务：进度、分步运行日志与结果（输出为 4x 的 50% 百分比缩放）
 
 <img width="2560" height="1380" alt="运行中的分步日志" src="https://github.com/user-attachments/assets/774794f7-b274-4640-af58-d16f20f11683" />
 
@@ -87,7 +87,6 @@
   按后端起用对应运行时目录，互不冲突
 - 后端选择器按厂商给默认值（NVIDIA→CUDA、AMD→DirectML、Intel→DirectML/OpenVINO，兜底 CPU），
   下拉框中未就绪的后端标注「（未就绪）」
-- Vulkan 第二后端（ncnn Real-ESRGAN CLI 子进程），AMD 无 DirectML 时的退路
 - 运行时能力探测：实际生效的 execution provider 与推理精度（fp16 / fp32）会回显到日志与界面
 - 超分会话按「后端 + 模型」缓存复用，省去每次任务 0.3–3 s 的加载时间
 
@@ -162,7 +161,7 @@
 SuperResolutionTool\SuperResolutionTool.exe
 ```
 
-目录内已含 Python 运行时、PySide6、ONNX Runtime、FFmpeg / FFprobe、ncnn 与 14 个 ONNX 模型，
+目录内已含 Python 运行时、PySide6、ONNX Runtime、FFmpeg / FFprobe 与 14 个 ONNX 模型，
 **无需安装 Python 或任何依赖**。请整体保留该目录（模型、DLL、FFmpeg 都在同级），建议拷到固定位置再运行。
 
 无界面自检（加载默认模型 → DirectML → 内置 FFmpeg → 实跑一次 4x 超分）：
@@ -195,7 +194,6 @@ python app\main.py -v           # 展开到每块 tile 的调试日志
 |---|---|---|
 | FFmpeg / FFprobe | `vendor/ffmpeg.exe`、`vendor/ffprobe.exe` | [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) full build（含三厂硬件编码器） |
 | ONNX 模型 | `models/onnx/*.onnx` | 按下文[内置模型](#内置模型)一节的来源与 `scripts/export_onnx.py` 自行导出 |
-| ncnn（可选，Vulkan 后端） | `vendor/realesrgan-ncnn-vulkan.exe` + `vendor/ncnn-models/` | Real-ESRGAN 官方 ncnn 发布包 |
 
 ---
 
@@ -290,7 +288,7 @@ python app\main.py -v           # 展开到每块 tile 的调试日志
 |---|---|---|
 | 契约层 | `app/core/types.py` | GPU / 后端 / 场景 / 模型 / 结果与进度的共享数据结构，各层只依赖它 |
 | 核心层 | `core/environment_checker.py`、`core/backend_selector.py`、`core/runtime_capabilities.py` | 枚举显卡（DXGI，失败退 WMI）、挑选独显、探测 execution provider、按后端起用对应运行时 |
-| 推理层 | `core/sr_engine.py`、`core/tiling.py`、`core/postprocess.py` | `OnnxEngine` / `VulkanEngine`、分块与拼接、导向滤波降噪与 USM 锐化 |
+| 推理层 | `core/sr_engine.py`、`core/tiling.py`、`core/postprocess.py` | `OnnxEngine`、分块与拼接、导向滤波降噪与 USM 锐化 |
 | 管线层 | `pipelines/image_pipeline.py`、`pipelines/video_pipeline.py`、`pipelines/ffmpeg_utils.py` | 单张 / 批量 / 逐帧任务编排、编码与封装、FFmpeg 调用与探测 |
 | 模型层 | `models/model_manager.py` | 内置注册表、自定义导入与注册、场景默认映射 |
 | 界面层 | `ui/main_window.py`、`ui/compare_view.py`、`ui/theme.py`、`ui/workers.py` | 四页导航、对比画布、令牌化主题与自绘控件、Qt 工作线程 |
@@ -370,7 +368,7 @@ super-resolution-tool/
 ├── models/
 │   ├── onnx/                   14 个内置 ONNX 模型（*.onnx 未入库）
 │   └── LICENSES.md             模型来源与授权清单
-├── vendor/                     ffmpeg / ffprobe / ncnn（未入库）
+├── vendor/                     ffmpeg / ffprobe（未入库）
 ├── scripts/
 │   ├── export_onnx.py          .pth → ONNX 导出（自动重映射社区 RRDB 键名）
 │   └── ui_preview.py           离屏渲染全部页面 + 布局/配色/主题程序化审计
@@ -393,7 +391,7 @@ python scripts/ui_preview.py --out-dir D:\model_output\images --tag after
 python app/main.py --headless          # 端到端自检（模型 + DirectML + FFmpeg）
 ```
 
-测试分布（共 **257** 项）：
+测试分布（共 **248** 项）：
 
 | 领域 | 文件（用例数） |
 |---|---|
@@ -401,9 +399,9 @@ python app/main.py --headless          # 端到端自检（模型 + DirectML + F
 | 图片管线 | `test_image_pipeline.py` (29)：命名、压缩档、尺寸策略、批量与取消、写盘回读 |
 | 推理引擎 | `test_sr_engine.py` (16)、`test_sr_engine_integration.py` (3, DirectML 真机) |
 | 分块与后处理 | `test_tiling.py` (11)、`test_postprocess.py` (7)、`test_denoise_routing.py` (9) |
-| 环境与后端 | `test_environment_checker.py` (13)、`test_backend_selector.py` (11)、`test_vulkan_engine.py` (6) |
+| 环境与后端 | `test_environment_checker.py` (12)、`test_backend_selector.py` (10) |
 | 视频管线 | `test_video_pipeline.py` (6)、`test_video_pipeline_integration.py` (1, slow)、`test_ffmpeg_utils.py` (13) |
-| 界面与日志 | `test_ui_logic.py` (15)、`test_ui_progress.py` (13)、`test_model_selector.py` (5)、`test_task_log.py` (9)、`test_main.py` (4) |
+| 界面与日志 | `test_ui_logic.py` (14)、`test_ui_progress.py` (13)、`test_model_selector.py` (5)、`test_task_log.py` (9)、`test_main.py` (4) |
 | 主题与渲染 | `test_theme.py` (7)：两套主题结构一致、正文 / 提示 / 日志 / 状态色对比度 ≥ 4.5:1；`test_theme_switch.py` (5)：切换即时生效并写盘；`test_ui_themed_rendering.py` (6)：对比画布与日志面板跟随主题、被拉伸的卡片不飘标题、空列表有投放提示 |
 | 交互控件 | `test_toast_image_grid.py` (9)：提示条进 / 退场与堆叠、缩略图列表拖放；`test_shortcuts_and_validation.py` (7)：快捷键绑定与内联校验联动 |
 | 模型与导出 | `test_model_manager.py` (8)、`test_export_onnx.py` (7) |
@@ -422,7 +420,7 @@ python dist\SuperResolutionTool\SuperResolutionTool.exe --headless   # 产物自
 ```
 
 - **one-dir 绿色版**（`contents_directory="."`），产物约 **900 MB**：内置 Python 运行时、PySide6、
-  ONNX Runtime、FFmpeg / FFprobe（含三厂硬件编码器）、ncnn 与 14 个 ONNX 模型；
+  ONNX Runtime、FFmpeg / FFprobe（含三厂硬件编码器）与 14 个 ONNX 模型；
 - spec 细节：排除 `torch / onnx / scipy / pandas / matplotlib` 等开发期依赖；
   采集 `onnxruntime` 与 `shiboken6` 动态库；过滤 `icu*.dll`（某些本地 ICU 构建只导出带版本的 C++ 符号，
   会导致 `QtWidgets` 报 WinError 127）；
@@ -436,7 +434,7 @@ python dist\SuperResolutionTool\SuperResolutionTool.exe --headless   # 产物自
 | 配置 | 位置 | 说明 |
 |---|---|---|
 | 界面设置 | `%LOCALAPPDATA%\SuperResolutionTool\settings.json` | 输出目录、覆盖策略、尺寸与压缩档、后端、降噪 / 锐化强度与模型、对比预览偏好、大窗口几何 |
-| 外部工具路径 | `<程序目录>\config.yaml`（复制 `config.example.yaml`） | 目前生效的是 `paths.ffmpeg / ffprobe / ncnn`；示例中的其它段落为预留项 |
+| 外部工具路径 | `<程序目录>\config.yaml`（复制 `config.example.yaml`） | 目前生效的是 `paths.ffmpeg / ffprobe`；示例中的其它段落为预留项 |
 | 日志目录 | `%LOCALAPPDATA%\SuperResolutionTool\logs\` | 4 MB × 3 轮转 |
 | 自定义模型注册表 | `<程序目录>\models\custom_models.json` | 每机状态，已 `.gitignore` |
 | 临时文件 | 系统临时目录（`srt-video-*` / `sr_smoke_*`） | 任务结束即清理 |
@@ -479,31 +477,23 @@ tile 4/9 · 17ms/块 · 剩余 0.08s              # 逐块进度（默认每若�
 | 仅 Windows | 显卡枚举走 DXGI / WMI，编码器路由为三厂 Windows 驱动 |
 | 必须有独立显卡 | 无独显直接拒绝启动（设计行为）；核显机型不受支持 |
 | 视频仅 8bit SDR | 10bit / HDR 输入会被明确拒绝，不会静默降级 |
-| Vulkan 后端模型子集 | ncnn 侧只有 `x4plus` / `anime` 系列，其它模型自动回退 DirectML |
 | CUDA / TensorRT 路径未实测 | 代码已按 EP 实现，但本机为 AMD，尚缺 NVIDIA 真机验证 |
 | `4x-UltraSharp_fp16` 授权未声明 | 仅供本地个人使用，**不可用于商业分发**；介意授权可自行从模型列表移除 |
-| 模型与二进制不入库 | 仓库不含 `.onnx` / FFmpeg / ncnn（体积原因），源码运行需按上文自行准备 |
+| 模型与二进制不入库 | 仓库不含 `.onnx` / FFmpeg（体积原因），源码运行需按上文自行准备 |
 
 ---
 
 ## 路线图
 
 核心功能已全部落地：环境检测与后端选择、ONNX 推理引擎（DirectML / CUDA / OpenVINO / CPU）、
-Vulkan 引擎（ncnn）、图片管线（单张 / 批量 / 尺寸与压缩策略）、视频管线（逐帧 + 硬件编码 + 音频 remux）、
+图片管线（单张 / 批量 / 尺寸与压缩策略）、视频管线（逐帧 + 硬件编码 + 音频 remux）、
 界面与打包（四页导航 / 对比预览 / 绿色免安装产物）、视觉与模型打磨（12 超分 + 2 降噪）。
 
 待办：
 
 - **NVIDIA 真机验证**：CUDA / TensorRT 路径已按 execution provider 实现，但开发机为 AMD，尚缺实测；
 - **CI**：GitHub Actions 跑单元测试（GPU 用例自动 skip）与离屏 UI 审计脚本；
-- **更多模型**：DRUNet / DPIR 一类纯 CNN 盲降噪（SCUNet 的公开 ONNX 在 DirectML 上会进程级崩溃，已排除）、
-  Anime4KCPP 集成（`config.example.yaml` 已预留路径）；
-- **Real-CUGAN 2x 的 Vulkan 后端（已调研，暂缓）**：ncnn 侧有现成端口
-  [nihui/realcugan-ncnn-vulkan](https://github.com/nihui/realcugan-ncnn-vulkan)（MIT，release 含 Windows 二进制
-  与预转换模型，无需自行转 ncnn）。代价是要引入**第二个 ncnn 二进制**（CLI 与模型命名空间都不同，
-  `VulkanEngine` 需按模型切换二进制与参数集）、打包体积再增约 30 MB，且进度/取消/tile 语义要重新对齐；
-  在 ONNX 后端已覆盖 2x 的前提下（DirectML / CUDA / CPU），收益主要体现在"未部署 DirectML 的环境"，
-  故暂缓。要做时按"下载 → 提取 → 引擎扩展 → 保真度实测 → 打包"的路径推进；
+- **更多模型**：DRUNet / DPIR 一类纯 CNN 盲降噪（SCUNet 的公开 ONNX 在 DirectML 上会进程级崩溃，已排除）；
 - **配置接线**：让 `config.yaml` 的 `inference` / `video` 段落真正生效（目前只有 `paths` 段落被读取）。
 
 ---
@@ -538,8 +528,8 @@ SwinIR 单会话加载约 3 s、单块推理更重；换来的收益是干净图
 - **内置模型**：均为公开预训练权重的格式转换，各自授权见 [`models/LICENSES.md`](models/LICENSES.md)，
   其中 `4x-UltraSharp_fp16` **无明确授权、不可商业分发**。模型权重不入库（`.gitignore`），
   由使用者按来源自行准备。
-- **第三方二进制**：FFmpeg / FFprobe（gyan.dev full build，含 x264 / x265 等 GPL 组件）、
-  ncnn 与 `realesrgan-ncnn-vulkan`（Real-ESRGAN 官方发布）均不入库，由使用者自行获取并遵守其授权。
+- **第三方二进制**：FFmpeg / FFprobe（gyan.dev full build，含 x264 / x265 等 GPL 组件）
+  均不入库，由使用者自行获取并遵守其授权。
 - **运行期依赖**：PySide6（LGPL）、ONNX Runtime（MIT）、NumPy（BSD-3）、Pillow（MIT-CMU）。
 
 ---
@@ -550,7 +540,6 @@ SwinIR 单会话加载约 3 s、单块推理更重；换来的收益是干净图
 
 - [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN)（BSD-3-Clause）：RRDB / SRVGG 架构与全部 Real-ESRGAN 权重
 - [SwinIR](https://github.com/JingyunLiang/SwinIR)（Apache-2.0）：SwinIR-M 经典超分 / 真实世界超分 / 彩色降噪权重
-- [ncnn](https://github.com/Tencent/ncnn) 与 `realesrgan-ncnn-vulkan`：Vulkan 后端
 - [FFmpeg](https://ffmpeg.org/)：视频解码 / 硬件编码 / 音频封装
 - [ONNX Runtime](https://github.com/microsoft/onnxruntime)：DirectML / CUDA 推理
 - [PySide6 / Qt](https://doc.qt.io/qtforpython/)：桌面界面

@@ -22,7 +22,7 @@
 | 显卡厂商 | 候选后端（按优先级） | 备注 |
 |---|---|---|
 | NVIDIA | CUDA → DirectML → CPU | CUDA 需 onnxruntime-gpu |
-| AMD | DirectML → Vulkan → CPU | DirectML 为推荐后端 |
+| AMD | DirectML → CPU | DirectML 为推荐后端 |
 | Intel | DirectML → OpenVINO → CPU | 独显需 Arc / Iris Xe Max 等 |
 | 未知 | CPU | 仅在无独显时才可能落到这里 |
 
@@ -36,7 +36,7 @@
 SuperResolutionTool\SuperResolutionTool.exe
 ```
 
-- 该目录已内置 Python 运行时、PySide6、ONNX Runtime、FFmpeg、ncnn 与 14 个 ONNX 模型，
+- 该目录已内置 Python 运行时、PySide6、ONNX Runtime、FFmpeg 与 14 个 ONNX 模型，
   **不需要安装 Python 或任何依赖**。
 - ⚠️ 目录必须整体保留，不要单独把 exe 拷出来 —— 模型、DLL、FFmpeg 都在同级目录里。
 - 建议把整个 `SuperResolutionTool` 文件夹拷到固定位置（如 `D:\Tools\`）再运行。
@@ -68,7 +68,7 @@ python app\main.py --headless # 无界面自检
 
 主题可在「设置 → 外观」里选 `跟随系统 / 浅色 / 深色`，深色模式整套配色（背板渐变与玻璃卡的 RGBA）自动切换，关闭重开不丢。
 
-可选配置：把 `config.example.yaml` 复制为 `config.yaml`，可覆盖 FFmpeg / ffprobe / ncnn 路径、默认后端、
+可选配置：把 `config.example.yaml` 复制为 `config.yaml`，可覆盖 FFmpeg / ffprobe 路径、默认后端、
 视频编码参数、模型缓存目录。配置缺失时全部走内置默认值，**不配也能跑**。
 
 ---
@@ -178,7 +178,6 @@ python app\main.py --headless # 无界面自检
 
 > 2x 分两条线：**真实照片**选 `RealESRGAN_x2plus`；**2D 动漫 / 截图**选 Real-CUGAN 五档
 > （按画面的噪声程度挑降噪档，噪点多选 denoise2x/3x）。这 5 档都是 2.6 MB 的双 UNet，比 RRDB 轻。
-> 注意：**2x 模型目前只能在 ONNX 后端（DirectML / CUDA / CPU）使用**，Vulkan(ncnn) 侧没有 2x 通用权重。
 
 降噪模型（**降噪模型** 下拉框，独立于超分模型）：
 
@@ -190,8 +189,6 @@ python app\main.py --headless # 无界面自检
 
 - **降噪强度** 滑块 `0.00–1.00`，`0.00` 即「关闭」。
 - **边缘锐化** 滑块默认 `0.25`（USM 锐化），过高会产生振铃，建议 0.1–0.4。
-- **Vulkan** 后端仅内置 `x4plus` / `anime` 系列模型（ncnn 侧无 x2plus 与 general），
-  其他模型会自动回退到 DirectML。
 
 ---
 
@@ -277,7 +274,6 @@ $env:SRT_LOG_LEVEL="debug"; python app\main.py           # 同上，环境变量
 |---|---|
 | 启动弹「未检测到独立显卡」 | 只有核显 / 驱动异常（DXGI 枚举为空且 WMI 兜底失败）。装好独显驱动后重试 |
 | 后端项显示「（未就绪）」 | 当前 onnxruntime 不含该 provider。AMD/Intel 装 `onnxruntime-directml`，NVIDIA 装 `onnxruntime-gpu` |
-| 选 Vulkan 后仍走 DirectML | 正常回退：ncnn 只带 x4plus / anime 系列模型，或 `realesr-animevideov3` 之外的模型无 Vulkan 支持 |
 | 视频报「仅支持 8bit SDR」 | 10bit / HDR 源暂不支持；先用 FFmpeg 转 8bit SDR 再处理 |
 | 图片任务日志显示「已跳过」 | 输出同名文件已存在且未勾选「覆盖已存在文件」 |
 | 首次推理卡顿 | 模型加载 + provider 初始化一次性开销，属正常；后续同模型任务会明显更快 |
