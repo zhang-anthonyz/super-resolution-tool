@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
 """Generate the application icon (assets/app.ico).
 
-Design: STUDIO jade rounded-square badge + a white magnifier lens over a 2x2
-pixel grid — "look closer, resolve more". The master is drawn at 1024px and
-downscaled with Lanczos so every smaller size stays crisp. Re-run after any
-tweak: ``python scripts/make_icon.py``.
+Design: STUDIO jade rounded-square badge + a "resolution ladder" — a faint
+2x2 source-pixel cluster at the bottom-left steps up through a mid-tone
+square to one large solid square at the top-right. The size progression *is*
+the message: upscale. The master is drawn at 1024px and downscaled with
+Lanczos so every smaller size stays crisp. Re-run after any tweak:
+``python scripts/make_icon.py``.
 """
 from pathlib import Path
 
@@ -20,7 +22,10 @@ GRADIENT_TOP = (10, 107, 80)      # #0A6B50
 GRADIENT_BOTTOM = (63, 175, 138)  # #3BAF8A
 BADGE_RADIUS = 230
 OFF_WHITE = (250, 250, 247)
-PIXEL_DIM = 150  # ~55% alpha white
+#: Ladder opacity progression: source pixels → step → upscaled output.
+SOURCE_ALPHA = 140   # ~55% white
+STEP_ALPHA = 190     # ~75% white
+OUTPUT_ALPHA = 255   # solid
 
 
 def _badge(size: int) -> Image.Image:
@@ -38,69 +43,37 @@ def _badge(size: int) -> Image.Image:
 
 
 def _mark(master: Image.Image) -> None:
-    """Draw the magnifier + pixel grid onto the 1024px master."""
+    """Draw the resolution ladder onto the 1024px master."""
     draw = ImageDraw.Draw(master)
     scale = master.width / MASTER
 
     def sx(value: float) -> int:
         return int(round(value * scale))
 
-    lens_center = (sx(430), sx(430))
-    lens_radius = sx(285)
-    ring = sx(66)
-    handle_length = sx(160)
-    handle_width = sx(96)
-
-    # Handle first so the lens ring overlaps its joint cleanly.
-    import math
-
-    angle = math.radians(45.0)
-    start = (
-        lens_center[0] + int((lens_radius - ring * 0.4) * math.cos(angle)),
-        lens_center[1] + int((lens_radius - ring * 0.4) * math.sin(angle)),
-    )
-    end = (
-        start[0] + int(handle_length * math.cos(angle)),
-        start[1] + int(handle_length * math.sin(angle)),
-    )
-    draw.line([start, end], fill=OFF_WHITE, width=handle_width)
-    for point in (start, end):
-        r = handle_width // 2
-        draw.ellipse(
-            (point[0] - r, point[1] - r, point[0] + r, point[1] + r),
-            fill=OFF_WHITE,
+    def square(x: int, y: int, size: int, alpha: int, radius: int) -> None:
+        draw.rounded_rectangle(
+            (x, y, x + size, y + size),
+            radius=radius,
+            fill=OFF_WHITE + (alpha,),
         )
 
-    # Lens ring.
-    draw.ellipse(
-        (
-            lens_center[0] - lens_radius,
-            lens_center[1] - lens_radius,
-            lens_center[0] + lens_radius,
-            lens_center[1] + lens_radius,
-        ),
-        outline=OFF_WHITE,
-        width=ring,
-    )
-
-    # 2x2 pixel grid centred in the lens: two solid, two dimmed.
-    cell = sx(170)
-    gap = sx(36)
-    corner_radius = sx(26)
-    top_left = (
-        lens_center[0] - cell - gap // 2,
-        lens_center[1] - cell - gap // 2,
-    )
+    # 2x2 source-pixel cluster, bottom-left.
+    cell = sx(84)
+    gap = sx(24)
+    origin = (sx(96), sx(1024 - 96 - 2 * cell - gap))
     for row in range(2):
         for col in range(2):
-            x0 = top_left[0] + col * (cell + gap)
-            y0 = top_left[1] + row * (cell + gap)
-            solid = (row + col) % 2 == 0
-            draw.rounded_rectangle(
-                (x0, y0, x0 + cell, y0 + cell),
-                radius=corner_radius,
-                fill=OFF_WHITE if solid else OFF_WHITE + (150,),
-            )
+            x = origin[0] + col * (cell + gap)
+            y = origin[1] + row * (cell + gap)
+            square(x, y, cell, SOURCE_ALPHA, sx(18))
+
+    # Mid step, centre of the diagonal.
+    step = sx(230)
+    square(sx(330), sx(330), step, STEP_ALPHA, sx(44))
+
+    # Upscaled output, top-right — the biggest, fully solid.
+    output = sx(400)
+    square(sx(560), sx(64), output, OUTPUT_ALPHA, sx(76))
 
 
 def main() -> None:
