@@ -157,10 +157,6 @@ def _ffprobe_path() -> Path:
     return _resolve_vendor_path("ffprobe", "ffprobe.exe")
 
 
-def _ncnn_path() -> Path:
-    return _resolve_vendor_path("ncnn", "realesrgan-ncnn-vulkan.exe")
-
-
 class _GUID(Structure):
     _fields_ = [
         ("Data1", c_uint32),
@@ -527,22 +523,17 @@ def available_backends(
     if gpu.vendor == GpuVendor.NVIDIA:
         backends = [Backend.CUDA, Backend.DIRECTML, Backend.CPU]
     elif gpu.vendor == GpuVendor.AMD:
-        backends = [Backend.DIRECTML, Backend.VULKAN, Backend.CPU]
+        backends = [Backend.DIRECTML, Backend.CPU]
     elif gpu.vendor == GpuVendor.INTEL:
         backends = [Backend.DIRECTML, Backend.CPU]
     else:
         backends = [Backend.CPU]
 
-    available: list[Backend] = []
-    for backend in backends:
-        if backend == Backend.VULKAN:
-            if _ncnn_path().is_file():
-                available.append(backend)
-            continue
-        if backend_available(backend, runtime_providers):
-            available.append(backend)
-
-    return available
+    return [
+        backend
+        for backend in backends
+        if backend_available(backend, runtime_providers)
+    ]
 
 
 def detect_video_bit_depth(video_path: str) -> tuple[int, bool]:

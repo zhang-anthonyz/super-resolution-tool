@@ -15,9 +15,6 @@ onnx_models = [
 datas = [
     (str(project_root / "vendor" / "ffmpeg.exe"), "vendor"),
     (str(project_root / "vendor" / "ffprobe.exe"), "vendor"),
-    (str(project_root / "vendor" / "realesrgan-ncnn-vulkan.exe"), "vendor"),
-    (str(project_root / "vendor" / "vcomp140.dll"), "vendor"),
-    (str(project_root / "vendor" / "ncnn-models"), "vendor/ncnn-models"),
 ] + onnx_models
 
 runtime_datas = [

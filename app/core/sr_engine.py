@@ -1,12 +1,10 @@
 """超分推理引擎（SuperResEngine）。
 
-统一接口，屏蔽多后端差异：ONNX(CUDA/DirectML/OpenVINO) 与 Vulkan(ncnn/Anime4KCPP)。
+统一接口，屏蔽多后端差异：ONNX(CUDA/DirectML/OpenVINO/CPU)。
 """
 from __future__ import annotations
 
 import logging
-import subprocess
-import tempfile
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -16,7 +14,7 @@ from typing import Callable, Optional
 import numpy as np
 from PIL import Image
 
-# 解除 Pillow 解压炸弹限制（Vulkan 后端读写大图）
+# 解除 Pillow 解压炸弹限制（超分需要读写大图）
 Image.MAX_IMAGE_PIXELS = None
 
 from .paths import app_root
@@ -732,125 +730,3 @@ class OnnxEngine(SuperResEngine):
             "allocate",
         )
         return any(marker in text for marker in markers)
-
-
-class VulkanEngine(SuperResEngine):
-    """Vulkan 后端（ncnn Real-ESRGAN + Anime4KCPP）。
-
-    V1 采用 subprocess 调 CLI（接受文件级/帧级粗粒度进度与取消控制）。
-    """
-
-    def __init__(self, backend: Backend):
-        super().__init__(backend)
-        self._model: Optional[ModelMeta] = None
-        self._ncnn_path: Optional[Path] = None
-        self._model_dir: Optional[Path] = None
-
-    @staticmethod
-    def _ncnn_model_name(model: ModelMeta, scale: int) -> str:
-        """Map the UI model name to an ncnn model name accepted by ``-n``."""
-        name = model.name
-        lowered = name.lower()
-
-        if "animevideov3" in lowered:
-            return f"realesr-animevideov3-x{int(scale)}"
-        if "anime" in lowered:
-            return "realesrgan-x4plus-anime"
-        if "x4plus" in lowered:
-            return "realesrgan-x4plus"
-        raise ValueError(
-            f"Vulkan 后端不支持模型「{name}」（ncnn 无对应模型），请切换 DirectML 后端"
-        )
-
-    def load_model(self, model: ModelMeta) -> None:
-        ncnn_path = app_root() / "vendor" / "realesrgan-ncnn-vulkan.exe"
-        model_dir = app_root() / "vendor" / "ncnn-models"
-        if not ncnn_path.is_file():
-            raise FileNotFoundError(f"ncnn 可执行文件不存在: {ncnn_path}")
-        if not model_dir.is_dir():
-            raise FileNotFoundError(f"ncnn 模型目录不存在: {model_dir}")
-
-        self._model = model
-        self._ncnn_path = ncnn_path
-        self._model_dir = model_dir
-
-    def upscale_image(self, image, scale=4, progress_cb=None, denoise_strength: float = 0.5):
-        if self._model is None or self._ncnn_path is None or self._model_dir is None:
-            raise RuntimeError("模型尚未加载，请先调用 load_model")
-        if scale not in (2, 3, 4):
-            raise ValueError("Vulkan ncnn 后端仅支持 2x/3x/4x 倍率")
-        if self.cancelled:
-            raise SuperResCancelled()
-
-        ncnn_model = self._ncnn_model_name(self._model, int(scale))
-        image = np.asarray(image)
-        if image.dtype != np.uint8:
-            raise TypeError("Vulkan 后端要求 uint8 RGB 输入")
-
-        with tempfile.TemporaryDirectory(prefix="srt-vulkan-") as temp_dir:
-            temp_root = Path(temp_dir)
-            input_path = temp_root / "input.png"
-            output_path = temp_root / "output.png"
-            Image.fromarray(image, "RGB").save(input_path)
-
-            if progress_cb is not None:
-                progress_cb(
-                    ProgressInfo(
-                        current=0,
-                        total=1,
-                        message="Vulkan 处理中 0/1",
-                    )
-                )
-
-            command = [
-                str(self._ncnn_path),
-                "-i",
-                str(input_path),
-                "-o",
-                str(output_path),
-                "-m",
-                self._model_dir.name,
-                "-n",
-                ncnn_model,
-                "-s",
-                str(int(scale)),
-            ]
-            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-            try:
-                completed = subprocess.run(
-                    command,
-                    capture_output=True,
-                    text=True,
-                    creationflags=creationflags,
-                    cwd=str(self._ncnn_path.parent),
-                    check=False,
-                )
-            except OSError as exc:
-                raise RuntimeError(f"无法启动 Vulkan ncnn 进程: {exc}") from exc
-
-            if self.cancelled:
-                raise SuperResCancelled()
-
-            if completed.returncode != 0:
-                detail = (completed.stderr or completed.stdout or "").strip()
-                raise RuntimeError(
-                    f"Vulkan ncnn 执行失败（exit={completed.returncode}）: {detail}"
-                )
-            if not output_path.is_file():
-                raise RuntimeError("Vulkan ncnn 未生成输出文件")
-
-            with Image.open(output_path) as output_image:
-                result = np.asarray(output_image.convert("RGB"))
-
-            if self.cancelled:
-                raise SuperResCancelled()
-
-            if progress_cb is not None:
-                progress_cb(
-                    ProgressInfo(
-                        current=1,
-                        total=1,
-                        message="Vulkan 处理完成 1/1",
-                    )
-                )
-            return result

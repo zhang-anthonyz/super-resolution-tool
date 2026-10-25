@@ -111,27 +111,19 @@ def test_supported_model_formats_and_copy_model_to_library(tmp_path):
     assert renamed.exists()
 
 
-def test_backend_choices_show_amd_recommended_backend_and_unready_vulkan():
+def test_backend_choices_show_amd_recommended_backend():
     gpu = make_gpu()
-    choices = backend_choices(gpu, [Backend.DIRECTML, Backend.CPU])
+    choices = backend_choices(gpu, [Backend.DIRECTML])
 
     assert [choice.backend for choice in choices] == [
         Backend.DIRECTML,
-        Backend.VULKAN,
         Backend.CPU,
     ]
     assert choices[0].available is True
     assert choices[0].display_label == "DirectML（推荐）"
     assert choices[1].available is False
-    assert choices[1].display_label == "Vulkan（未就绪）"
+    assert choices[1].display_label == "CPU（未就绪）"
     assert recommended_backend_index(choices) == 0
-
-
-def test_backend_choices_keep_vulkan_when_runtime_available():
-    gpu = make_gpu()
-    choices = backend_choices(gpu, [Backend.DIRECTML, Backend.VULKAN, Backend.CPU])
-
-    assert [choice.available for choice in choices] == [True, True, True]
 
 
 def test_8bit_sdr_prompt_logic():

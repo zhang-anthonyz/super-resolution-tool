@@ -118,8 +118,6 @@ def backend_available(
     providers: Optional[Iterable[str]] = None,
 ) -> bool:
     """Return whether ``backend`` can be served by the detected ORT providers."""
-    if backend == Backend.VULKAN:
-        return False
     provider = provider_for_backend(backend)
     if provider is None:
         return False

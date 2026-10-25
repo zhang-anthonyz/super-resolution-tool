@@ -105,25 +105,14 @@ def test_detect_video_bit_depth_returns_sdr_default_when_ffprobe_missing(
     assert detect_video_bit_depth(str(video)) == (8, False)
 
 
-def test_available_backends_removes_vulkan_when_ncnn_missing(monkeypatch):
+def test_available_backends_amd_lists_directml_and_cpu():
     gpu = make_gpu(vendor=GpuVendor.AMD)
-    monkeypatch.setattr(environment_checker, "_ncnn_path", lambda: Path("missing.exe"))
 
     assert available_backends(gpu) == [Backend.DIRECTML, Backend.CPU]
 
 
-def test_available_backends_keeps_vulkan_when_ncnn_exists(tmp_path, monkeypatch):
-    ncnn = tmp_path / "realesrgan-ncnn-vulkan.exe"
-    ncnn.write_bytes(b"")
-    gpu = make_gpu(vendor=GpuVendor.AMD)
-    monkeypatch.setattr(environment_checker, "_ncnn_path", lambda: ncnn)
-
-    assert available_backends(gpu) == [Backend.DIRECTML, Backend.VULKAN, Backend.CPU]
-
-
 def test_available_backends_respects_runtime_providers(monkeypatch):
     gpu = make_gpu(vendor=GpuVendor.NVIDIA)
-    monkeypatch.setattr(environment_checker, "_ncnn_path", lambda: Path("missing.exe"))
 
     assert available_backends(
         gpu,

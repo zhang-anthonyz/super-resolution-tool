@@ -43,13 +43,12 @@ BASE_BACKEND_LABELS = {
     Backend.TENSORRT: "TensorRT",
     Backend.DIRECTML: "DirectML",
     Backend.OPENVINO: "OpenVINO",
-    Backend.VULKAN: "Vulkan",
     Backend.CPU: "CPU",
 }
 
 VENDOR_BACKEND_CANDIDATES = {
     GpuVendor.NVIDIA: (Backend.CUDA, Backend.DIRECTML, Backend.CPU),
-    GpuVendor.AMD: (Backend.DIRECTML, Backend.VULKAN, Backend.CPU),
+    GpuVendor.AMD: (Backend.DIRECTML, Backend.CPU),
     GpuVendor.INTEL: (Backend.DIRECTML, Backend.OPENVINO, Backend.CPU),
     GpuVendor.UNKNOWN: (Backend.CPU,),
 }

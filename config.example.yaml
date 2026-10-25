@@ -5,7 +5,7 @@ app:
   theme: dark          # dark / light
 
 inference:
-  backend: auto        # auto / cuda / tensorrt / directml / vulkan / openvino / cpu
+  backend: auto        # auto / cuda / tensorrt / directml / openvino / cpu
   precision: auto      # auto / fp16 / fp32
   tile_size: 0         # 0 = 自动（按显存余量）
 
@@ -21,5 +21,3 @@ models:
 paths:
   ffmpeg: ./vendor/ffmpeg.exe
   ffprobe: ./vendor/ffprobe.exe
-  ncnn: ./vendor/realesrgan-ncnn-vulkan.exe
-  anime4k: ./vendor/anime4kcpp/

@@ -61,8 +61,6 @@ class BackendSelector:
           动态加载；注意 onnxruntime 的 ``onnxruntime.capi`` 子包需一并处理。
         """
         target_provider = provider_for_backend(backend)
-        if backend == Backend.VULKAN:
-            raise ValueError("Vulkan 后端不使用 onnxruntime")
         if target_provider is None:
             raise ValueError(f"不支持的 ONNX Runtime 后端: {backend}")
 

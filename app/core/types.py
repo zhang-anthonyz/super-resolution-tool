@@ -52,7 +52,6 @@ class Backend(str, Enum):
     TENSORRT = "tensorrt"   # onnxruntime-gpu TensorRT，NVIDIA 可选
     DIRECTML = "directml"   # onnxruntime-directml，AMD/Intel 主力，NVIDIA 备选
     OPENVINO = "openvino"   # Intel 可选
-    VULKAN = "vulkan"       # ncnn / Anime4KCPP，AMD 第二后端
     CPU = "cpu"             # 兜底
 
 
@@ -78,8 +77,8 @@ class ModelMeta:
     name: str
     scale: Optional[int]               # 固定倍率；scale-aware 模型（如 SRMD）填 None
     scene: Scene                       # 适用场景
-    backend: Backend                   # 可用后端（Anime4K 仅 VULKAN/CPU）
-    model_path: Path                   # 模型路径（.onnx 或 ncnn .param/.bin 目录）
+    backend: Backend                   # 可用后端
+    model_path: Path                   # 模型路径（.onnx）
     denoise_pair_path: Optional[Path] = None  # 降噪模型路径（ONNX 后端使用）
     # 降噪模型自身的倍率：1 表示"在输入尺度做预降噪"，None 表示与主模型同倍率
     # （同倍率时按降噪强度与主模型输出做插值，即原来的 pair 混合路径）。

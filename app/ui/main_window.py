@@ -773,7 +773,7 @@ class MainWindow(QMainWindow):
     def _build_settings_about_card(self) -> QWidget:
         card, body = self._make_card("关于", eyebrow="About")
         for text in (
-            "推理后端：ONNX Runtime（CUDA / DirectML / OpenVINO）与 ncnn Vulkan",
+            "推理后端：ONNX Runtime（CUDA / DirectML / OpenVINO / CPU）",
             "视频编码：内置 ffmpeg，支持 H.264 / HEVC 硬件编码",
             "隐私：全部处理在本地完成，不联网、不上传素材",
         ):

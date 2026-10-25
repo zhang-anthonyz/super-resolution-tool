@@ -8,7 +8,7 @@ from typing import Any, Iterable, Optional
 
 from PySide6.QtCore import QThread, Signal
 
-from ..core.sr_engine import OnnxEngine, SuperResCancelled, VulkanEngine
+from ..core.sr_engine import OnnxEngine, SuperResCancelled
 from ..core.types import Backend, ModelMeta, VideoCodec
 from ..pipelines.image_pipeline import upscale_batch
 from ..pipelines.video_pipeline import upscale_video
@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 #: ~3s for SwinIR, and users typically run several tasks in a row against the
 #: same model. Sessions are therefore kept for reuse; one entry only, so VRAM
 #: held by an unused model is released as soon as a different one is loaded.
-_ENGINE_CACHE: dict[tuple[str, str], OnnxEngine | VulkanEngine] = {}
+_ENGINE_CACHE: dict[tuple[str, str], OnnxEngine] = {}
 _ENGINE_CACHE_LOCK = threading.Lock()
 
 
@@ -27,7 +27,7 @@ def _cache_key(backend: Backend, model: ModelMeta) -> tuple[str, str]:
     return (backend.value, str(model.model_path))
 
 
-def _load_engine(backend: Backend, model: ModelMeta) -> OnnxEngine | VulkanEngine:
+def _load_engine(backend: Backend, model: ModelMeta) -> OnnxEngine:
     key = _cache_key(backend, model)
     with _ENGINE_CACHE_LOCK:
         cached = _ENGINE_CACHE.get(key)
@@ -37,10 +37,7 @@ def _load_engine(backend: Backend, model: ModelMeta) -> OnnxEngine | VulkanEngin
             return cached
         _ENGINE_CACHE.clear()
 
-    if backend == Backend.VULKAN:
-        engine = VulkanEngine(backend)
-    else:
-        engine = OnnxEngine(backend)
+    engine = OnnxEngine(backend)
     engine.load_model(model)
 
     with _ENGINE_CACHE_LOCK:
@@ -48,10 +45,8 @@ def _load_engine(backend: Backend, model: ModelMeta) -> OnnxEngine | VulkanEngin
     return engine
 
 
-def _runtime_label(engine: OnnxEngine | VulkanEngine) -> str:
-    if isinstance(engine, OnnxEngine):
-        return engine.runtime_label
-    return "Vulkan ncnn"
+def _runtime_label(engine: OnnxEngine) -> str:
+    return engine.runtime_label
 
 
 class ImageUpscaleWorker(QThread):
@@ -99,7 +94,7 @@ class ImageUpscaleWorker(QThread):
             float(resize_percent) if resize_percent is not None else None
         )
         self._cancel_event = threading.Event()
-        self._engine: OnnxEngine | VulkanEngine | None = None
+        self._engine: OnnxEngine | None = None
 
     def cancel(self) -> None:
         self._cancel_event.set()
@@ -164,7 +159,7 @@ class VideoUpscaleWorker(QThread):
         self._denoise_strength = float(denoise_strength)
         self._sharpen_strength = float(sharpen_strength)
         self._cancel_event = threading.Event()
-        self._engine: OnnxEngine | VulkanEngine | None = None
+        self._engine: OnnxEngine | None = None
 
     def cancel(self) -> None:
         self._cancel_event.set()

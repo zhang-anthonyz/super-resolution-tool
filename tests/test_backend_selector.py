@@ -77,10 +77,3 @@ def test_load_onnxruntime_cpu_returns_module():
     onnxruntime = selector.load_onnxruntime(Backend.CPU)
 
     assert "CPUExecutionProvider" in onnxruntime.get_available_providers()
-
-
-def test_load_onnxruntime_rejects_vulkan_backend():
-    selector = BackendSelector(make_gpu(GpuVendor.AMD))
-
-    with pytest.raises(ValueError, match="不使用 onnxruntime"):
-        selector.load_onnxruntime(Backend.VULKAN)

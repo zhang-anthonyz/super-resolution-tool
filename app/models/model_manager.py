@@ -359,7 +359,11 @@ def _parse_backend(value: Any) -> Backend:
         return value
     if value is None:
         return Backend.DIRECTML
-    return Backend(str(value).strip().lower())
+    try:
+        return Backend(str(value).strip().lower())
+    except ValueError:
+        # 已移除的后端（如 vulkan）写入过旧的自定义模型存档时回退默认值
+        return Backend.DIRECTML
 
 
 def _parse_scale(value: Any) -> Optional[int]:
