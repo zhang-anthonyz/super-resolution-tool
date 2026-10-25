@@ -287,11 +287,11 @@ QFrame#sidebar {
 QLabel#brandMark {
     background-color: $ACCENT;
     color: $SURFACE;
-    border-radius: 6px;
-    font-size: 13px;
+    border-radius: 8px;
+    font-size: 10px;
     font-weight: 800;
     font-family: $UI_FONT;
-    letter-spacing: 1px;
+    letter-spacing: 0.5px;
 }
 
 QLabel#brandTitle {

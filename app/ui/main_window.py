@@ -351,9 +351,9 @@ class MainWindow(QMainWindow):
 
         brand = QHBoxLayout()
         brand.setSpacing(12)
-        mark = QLabel("SR")
+        mark = QLabel("SR-DX")
         mark.setObjectName("brandMark")
-        mark.setFixedSize(34, 34)
+        mark.setFixedSize(40, 40)
         mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
         brand_text = QVBoxLayout()
         brand_text.setSpacing(2)
