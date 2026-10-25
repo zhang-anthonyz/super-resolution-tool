@@ -61,6 +61,16 @@ NEUTRAL = "#8E8878"
 DANGER_SOFT = "#F5E1DD"
 DANGER_SOFT_BORDER = "#D89A92"
 
+#: Progress-bar fill: medium-saturation tints. The text-safe semantic colours
+#: above are tuned for 4.5:1 contrast and read almost black when used as a
+#: fat bar fill — the bar gets its own lighter, quieter family.
+PROGRESS_TRACK = "#EAE3D5"
+PROGRESS_NORMAL = "#3BAF8A"
+PROGRESS_SUCCESS = "#43A56E"
+PROGRESS_WARNING = "#C8973F"
+PROGRESS_ERROR = "#D3716F"
+PROGRESS_NEUTRAL = "#AEA694"
+
 # ------------------------------------------------------------------ DARK ---
 #: Deep charcoal canvas. Deliberately not #000000 — pure black eats anti-
 #: aliasing of 1px strokes and makes the accent too aggressive.
@@ -94,6 +104,14 @@ DARK_DANGER = "#F87171"
 DARK_NEUTRAL = "#5A5A5A"
 DARK_DANGER_SOFT = "#2A1318"
 DARK_DANGER_SOFT_BORDER = "#7F2D2D"
+
+#: See the light-mode PROGRESS_* block: mid-tone fills, calm track.
+DARK_PROGRESS_TRACK = "#23272F"
+DARK_PROGRESS_NORMAL = "#3EC4A7"
+DARK_PROGRESS_SUCCESS = "#4FC47E"
+DARK_PROGRESS_WARNING = "#D8AC4F"
+DARK_PROGRESS_ERROR = "#E07E7E"
+DARK_PROGRESS_NEUTRAL = "#5C636E"
 
 # --- Fonts ----------------------------------------------------------------
 #: Body + display. Outfit is geometric, has a wide weight range (300–900),
@@ -157,6 +175,12 @@ LIGHT_TOKENS = {
     "NEUTRAL": NEUTRAL,
     "DANGER_SOFT": DANGER_SOFT,
     "DANGER_SOFT_BORDER": DANGER_SOFT_BORDER,
+    "PROGRESS_TRACK": PROGRESS_TRACK,
+    "PROGRESS_NORMAL": PROGRESS_NORMAL,
+    "PROGRESS_SUCCESS": PROGRESS_SUCCESS,
+    "PROGRESS_WARNING": PROGRESS_WARNING,
+    "PROGRESS_ERROR": PROGRESS_ERROR,
+    "PROGRESS_NEUTRAL": PROGRESS_NEUTRAL,
     # Hairline grid + film-grain texture (procedural, see BackdropWidget).
     "GRID_RGB": "139, 132, 108",
     "GRAIN_RGB": "60, 50, 30",
@@ -193,6 +217,12 @@ DARK_TOKENS = {
     "NEUTRAL": DARK_NEUTRAL,
     "DANGER_SOFT": DARK_DANGER_SOFT,
     "DANGER_SOFT_BORDER": DARK_DANGER_SOFT_BORDER,
+    "PROGRESS_TRACK": DARK_PROGRESS_TRACK,
+    "PROGRESS_NORMAL": DARK_PROGRESS_NORMAL,
+    "PROGRESS_SUCCESS": DARK_PROGRESS_SUCCESS,
+    "PROGRESS_WARNING": DARK_PROGRESS_WARNING,
+    "PROGRESS_ERROR": DARK_PROGRESS_ERROR,
+    "PROGRESS_NEUTRAL": DARK_PROGRESS_NEUTRAL,
     "GRID_RGB": "70, 80, 90",
     "GRAIN_RGB": "200, 200, 200",
     "GRAIN_ALPHA": "0.04",
@@ -631,7 +661,7 @@ QPushButton#cancelButton {
 
 /* ============================ progress ======================== */
 QProgressBar {
-    background-color: $SURFACE_MUTED;
+    background-color: $PROGRESS_TRACK;
     border: 1px solid $BORDER;
     border-radius: 4px;
     min-height: 8px;
@@ -639,7 +669,7 @@ QProgressBar {
 }
 
 QProgressBar::chunk {
-    background-color: $ACCENT;
+    background-color: $PROGRESS_NORMAL;
     border-radius: 3px;
 }
 
