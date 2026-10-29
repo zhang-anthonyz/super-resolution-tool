@@ -7,7 +7,7 @@
 ![Platform](https://img.shields.io/badge/Platform-Windows%2010%20%2F%2011%20x64-0078D6?logo=windows&logoColor=white)
 ![UI](https://img.shields.io/badge/UI-PySide6%206.12-41CD52?logo=qt&logoColor=white)
 ![Runtime](https://img.shields.io/badge/Inference-ONNX%20Runtime%20%28DirectML%20%2F%20CUDA%29-005CED)
-![Tests](https://img.shields.io/badge/Tests-257%20passed-success)
+![Tests](https://img.shields.io/badge/Tests-266%20passed-success)
 ![License](https://img.shields.io/badge/License-MIT-blue)
 
 ---
@@ -94,6 +94,8 @@
 
 - 分块推理：默认 512 px 分块、10 px 重叠、重叠带线性羽化拼接（接缝台阶 ≤ 12 级），
   显存不足自动降级到 256 px
+- **EXIF 方向转正**：手机照片按显示方向转正后再超分，输出尺寸与所见一致（而非按存储的横竖来）
+- **保留透明通道**：PNG / WEBP 的 Alpha 随超分结果一并放大，输出仍是 RGBA；输出 JPEG 时按白底合成
 - 三档输出压缩（JPEG 质量 / PNG 压缩级别 / WEBP 质量或无损），默认档位以"10 倍保存速度换 14% 体积"为取舍
 - 输出尺寸三选一：保持超分尺寸 / 回缩原图尺寸 / 按超分结果的百分比（5–400%）等比缩放
 - 批量任务逐个报告进度与耗时（解码 / 推理 / 后处理 / 编码分段计时，含 MP/s），同名文件可跳过或覆盖
@@ -101,9 +103,10 @@
 **视频超分**
 
 - 解码 → 推理 → 编码全程走管道（rawvideo rgb24），不落盘中间帧
+- **尊重显示矩阵**：带旋转元数据的竖拍视频按显示方向转正后处理，输出即所见方向（宽高相应互换）
 - 三厂硬件编码器路由 + 参数：NVENC `-cq 21 -preset p4`、AMF `-rc cqp -qp_i 18 -qp_p 20`、
   QSV `-global_quality 22`；编码器失败自动回退 `libx264 / libx265`
-- 音频流原样复制（remux），并保留像素宽高比（`setsar`）与旋转元数据（`rotate`）
+- 音频流原样复制（remux），并保留像素宽高比（`setsar`）；旋转元数据在解码阶段转正到像素里
 - 仅接受 8bit SDR，检测到 10bit / HDR（`p010`、`smpte2084`、`bt2020` 等）直接给出明确失败原因
 
 **降噪与锐化**
@@ -127,7 +130,7 @@
 - 分步运行日志：终端 + 轮转文件（4 MB × 3）+ 界面日志面板同源，`-v` 展开到每块 tile
 - 绿色免安装打包（PyInstaller one-dir，约 900 MB，内置 Python 运行时与全部依赖），
   自带无界面自检 `--headless`
-- 257 项自动化测试（含 DirectML 真机集成测试）与离屏 UI 渲染审计脚本
+- 266 项自动化测试（含 DirectML 真机集成测试）与离屏 UI 渲染审计脚本
 
 ---
 
@@ -372,7 +375,7 @@ super-resolution-tool/
 ├── scripts/
 │   ├── export_onnx.py          .pth → ONNX 导出（自动重映射社区 RRDB 键名）
 │   └── ui_preview.py           离屏渲染全部页面 + 布局/配色/主题程序化审计
-├── tests/                      257 项测试（pytest）
+├── tests/                      266 项测试（pytest）
 ├── docs/                       技术方案、模型导出笔记
 ├── SuperResolutionTool.spec    PyInstaller 打包配置
 ├── config.example.yaml         外部工具路径等可选配置示例
@@ -391,12 +394,13 @@ python scripts/ui_preview.py --out-dir D:\model_output\images --tag after
 python app/main.py --headless          # 端到端自检（模型 + DirectML + FFmpeg）
 ```
 
-测试分布（共 **248** 项）：
+测试分布（共 **266** 项）：
 
 | 领域 | 文件（用例数） |
 |---|---|
 | 对比预览 | `test_compare_view.py` (37)：几何映射、放大格定位与让位、光标锚定缩放、平移夹紧、设置往返 |
 | 图片管线 | `test_image_pipeline.py` (29)：命名、压缩档、尺寸策略、批量与取消、写盘回读 |
+| 方向与透明 | `test_orientation_and_alpha.py` (16)：EXIF 方向转正、Alpha 通道保留、视频显示矩阵旋转 |
 | 推理引擎 | `test_sr_engine.py` (16)、`test_sr_engine_integration.py` (3, DirectML 真机) |
 | 分块与后处理 | `test_tiling.py` (11)、`test_postprocess.py` (7)、`test_denoise_routing.py` (9) |
 | 环境与后端 | `test_environment_checker.py` (12)、`test_backend_selector.py` (10) |

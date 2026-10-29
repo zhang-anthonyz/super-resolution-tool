@@ -54,6 +54,7 @@ from PySide6.QtWidgets import (
 
 from . import icons as icons_mod
 from . import theme
+from ..core.image_io import orient_source
 
 
 #: Width allocated to the thumbnail inside each row, in pixels.
@@ -426,8 +427,11 @@ _SUPPORTED_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
 def _load_thumbnail(path: str, side_px: int) -> QPixmap | None:
     try:
         with _PILImage.open(path) as img:
-            img.thumbnail((side_px * 2, side_px * 2))
-            img = img.convert("RGBA")
+            # Apply the EXIF orientation so a phone photo's thumbnail is not
+            # shown lying on its side (the pipeline orients its output too).
+            oriented, _exif = orient_source(img)
+            oriented.thumbnail((side_px * 2, side_px * 2))
+            img = oriented.convert("RGBA")
             data = img.tobytes("raw", "RGBA")
         pix = QPixmap.fromImage(__qt_image_from_buffer__(data, img.size))
         if pix.isNull():
@@ -438,9 +442,11 @@ def _load_thumbnail(path: str, side_px: int) -> QPixmap | None:
 
 
 def _read_pixel_size(path: str) -> tuple[int | None, int | None]:
+    """Return the displayed pixel size (EXIF orientation applied)."""
     try:
         with _PILImage.open(path) as img:
-            return img.size
+            oriented, _exif = orient_source(img)
+            return oriented.size
     except Exception:
         return None, None
 

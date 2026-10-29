@@ -11,6 +11,7 @@ from PIL import Image
 # 超分工具需处理大图（4x 超分后像素激增），解除 Pillow 解压炸弹限制
 Image.MAX_IMAGE_PIXELS = None
 
+from ..core.image_io import extract_alpha, orient_source
 from ..core.sr_engine import SuperResCancelled, resolve_denoise_plan
 from ..core.postprocess import finishing_touch
 from ..core.task_log import TaskLog, format_bytes, format_duration
@@ -95,18 +96,56 @@ def _save_image(
     image: np.ndarray,
     out_path: Path,
     compression_profile: str = COMPRESSION_PROFILE_HIGH,
+    alpha: Optional[np.ndarray] = None,
+    exif: Optional[bytes] = None,
+    icc_profile: Optional[bytes] = None,
 ) -> dict[str, Any]:
-    """Encode ``image`` and return the encoder options that were used."""
+    """Encode ``image`` and return the encoder options that were used.
+
+    ``alpha`` is an optional ``(H, W)`` uint8 transparency mask; it is merged
+    back into the colour channels so PNG/WEBP outputs keep their transparency.
+    ``exif`` and ``icc_profile`` are metadata blocks carried over from the
+    source, so the output keeps its shooting metadata and colour space.
+
+    The returned dict holds only the encoder options (it is logged verbatim),
+    so the metadata blocks are passed to the encoder separately.
+    """
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     image_format = _format_for_extension(out_path.suffix.lower())
-    pil_image = Image.fromarray(np.asarray(image), "RGB")
+    array = np.asarray(image)
+    mode = "RGB"
+    if alpha is not None:
+        alpha_array = np.asarray(alpha, dtype=np.uint8)
+        if alpha_array.shape[:2] == array.shape[:2]:
+            if image_format == "JPEG":
+                # JPEG cannot store transparency: composite over white so the
+                # picture keeps the appearance the user saw, instead of
+                # showing the colour values stored under the transparent area.
+                alpha_float = alpha_array.astype(np.float32) / 255.0
+                background = np.full_like(array, 255, dtype=np.float32)
+                array = (
+                    array.astype(np.float32) * alpha_float[:, :, None]
+                    + background * (1.0 - alpha_float[:, :, None])
+                ).astype(np.uint8)
+            else:
+                array = np.dstack([array, alpha_array])
+                mode = "RGBA"
+    pil_image = Image.fromarray(array, mode)
 
     save_options: dict[str, Any] = {
         "format": image_format,
         **_compression_options(image_format, compression_profile),
     }
-    pil_image.save(out_path, **save_options)
+    if exif or icc_profile:
+        extra: dict[str, Any] = {}
+        if exif:
+            extra["exif"] = exif
+        if icc_profile:
+            extra["icc_profile"] = icc_profile
+        pil_image.save(out_path, **extra, **save_options)
+    else:
+        pil_image.save(out_path, **save_options)
     return save_options
 
 
@@ -217,9 +256,14 @@ def upscale_single(
 
         step_started = time.perf_counter()
         with Image.open(image_path) as source:
-            image = np.asarray(source.convert("RGB"))
-            original_size = source.size
+            # Bake the EXIF orientation into the pixels so a phone photo is
+            # upscaled the way it is displayed, not the way it is stored.
+            oriented, exif_bytes = orient_source(source)
+            original_size = oriented.size
             source_format = source.format or image_path.suffix.lstrip(".")
+            alpha_image = extract_alpha(oriented)
+            icc_bytes = source.info.get("icc_profile")
+            image = np.asarray(oriented.convert("RGB"))
         decode_seconds = time.perf_counter() - step_started
         log.info(
             "%s解码 %s · %sx%s · %s · %s · %.3fs",
@@ -331,6 +375,20 @@ def upscale_single(
             _report_phase(progress_cb, 0.92, "finish", "降噪与锐化")
 
         resize_seconds = 0.0
+        if alpha_image is not None:
+            # Bring the transparency mask to the model's output resolution so
+            # it stays aligned with the sharpened colour channels, then let it
+            # follow the same resize steps as the RGB result below.
+            alpha_pil = Image.fromarray(np.asarray(alpha_image), "L")
+            if alpha_pil.size != (upscaled.shape[1], upscaled.shape[0]):
+                alpha_pil = alpha_pil.resize(
+                    (upscaled.shape[1], upscaled.shape[0]),
+                    Image.Resampling.LANCZOS,
+                )
+            alpha_array = np.asarray(alpha_pil)
+        else:
+            alpha_array = None
+
         if resize_percent is not None and not _is_percentage_noop(resize_percent):
             target = percentage_size(
                 (upscaled.shape[1], upscaled.shape[0]), resize_percent
@@ -338,6 +396,12 @@ def upscale_single(
             step_started = time.perf_counter()
             pil_image = Image.fromarray(np.asarray(upscaled), "RGB")
             upscaled = np.asarray(pil_image.resize(target, Image.Resampling.LANCZOS))
+            if alpha_array is not None:
+                alpha_array = np.asarray(
+                    Image.fromarray(alpha_array, "L").resize(
+                        target, Image.Resampling.LANCZOS
+                    )
+                )
             resize_seconds = time.perf_counter() - step_started
             log.info(
                 "%s按超分结果的 %g%% 缩放 → %sx%s · %.3fs",
@@ -359,6 +423,12 @@ def upscale_single(
             upscaled = np.asarray(
                 pil_image.resize(original_size, Image.Resampling.LANCZOS)
             )
+            if alpha_array is not None:
+                alpha_array = np.asarray(
+                    Image.fromarray(alpha_array, "L").resize(
+                        original_size, Image.Resampling.LANCZOS
+                    )
+                )
             resize_seconds = time.perf_counter() - step_started
             log.info(
                 "%s回缩到原图尺寸 %sx%s · %.3fs",
@@ -372,7 +442,12 @@ def upscale_single(
         _report_phase(progress_cb, 0.96, "save", "正在保存")
         step_started = time.perf_counter()
         save_options = _save_image(
-            upscaled, out_path, compression_profile=compression_profile
+            upscaled,
+            out_path,
+            compression_profile=compression_profile,
+            alpha=alpha_array,
+            exif=exif_bytes,
+            icc_profile=icc_bytes,
         )
         save_seconds = time.perf_counter() - step_started
         detail = [

@@ -159,22 +159,21 @@ def probe_video(path: str | Path) -> dict[str, Any]:
 
     has_audio = any(stream.get("codec_type") == "audio" for stream in streams)
     sar = str(video.get("sample_aspect_ratio") or "")
+    # Rotation comes from the stream's *display matrix* only. That is the one
+    # signal FFmpeg itself honours when decoding (verified: a stream carrying
+    # only a legacy ``rotate`` metadata tag is decoded unrotated, while a
+    # display matrix is applied). The matrix is reported counter-clockwise in
+    # degrees; negative values (e.g. -90 for 270°) are normalised to 0..359.
     rotation: Optional[int] = None
-    tags = video.get("tags")
-    if isinstance(tags, dict) and tags.get("rotate") is not None:
-        try:
-            rotation = int(tags["rotate"])
-        except (TypeError, ValueError):
-            rotation = None
     side_data = video.get("side_data_list")
-    if rotation is None and isinstance(side_data, list):
+    if isinstance(side_data, list):
         for item in side_data:
             if not isinstance(item, dict):
                 continue
             if item.get("rotation") is None:
                 continue
             try:
-                rotation = int(item["rotation"])
+                rotation = int(item["rotation"]) % 360
             except (TypeError, ValueError):
                 rotation = None
             if rotation is not None:
