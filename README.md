@@ -191,12 +191,21 @@ python app\main.py --headless   # 无界面自检
 python app\main.py -v           # 展开到每块 tile 的调试日志
 ```
 
-内置 ONNX 模型随仓库提供（`models/onnx/`，13 个文件、共 255 MB）；源码运行只需要另备 FFmpeg 二进制
-（体积原因未入库，见 `.gitignore`）：
+内置 ONNX 模型随仓库提供（`models/onnx/`，13 个文件、共 255 MB）；FFmpeg 二进制体积过大不入库
+（见 `.gitignore`），用仓库脚本一次拉取：
+
+```powershell
+python scripts\prepare_vendor.py                    # 默认 BtbN（GitHub，zip，约 192 MB）
+python scripts\prepare_vendor.py --source gyan      # gyan.dev essentials（zip，约 110 MB）
+python scripts\prepare_vendor.py --source gyan-full # gyan.dev 完整构建（.7z，需本机 7-Zip）
+```
 
 | 资源 | 放置位置 | 获取方式 |
 |---|---|---|
-| FFmpeg / FFprobe | `vendor/ffmpeg.exe`、`vendor/ffprobe.exe` | [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) full build（含三厂硬件编码器） |
+| FFmpeg / FFprobe | `vendor/ffmpeg.exe`、`vendor/ffprobe.exe` | `python scripts\prepare_vendor.py`（BtbN / [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) 的 GPL 静态构建，都含三厂硬件编码器） |
+
+脚本会校验产物：打印两者版本，并逐个确认 nvenc / amf / qsv 六个硬件编码器存在；
+缺编码器时返回非零退出码。需要代理时先设 `HTTPS_PROXY`。
 
 ---
 
@@ -370,8 +379,9 @@ super-resolution-tool/
 ├── models/
 │   ├── onnx/                   13 个内置 ONNX 模型
 │   └── LICENSES.md             模型来源与授权清单
-├── vendor/                     ffmpeg / ffprobe（未入库）
+├── vendor/                     ffmpeg / ffprobe（未入库，用 prepare_vendor.py 拉取）
 ├── scripts/
+│   ├── prepare_vendor.py       下载 FFmpeg 构建到 vendor/（BtbN / gyan.dev）并校验三厂硬件编码器
 │   ├── export_onnx.py          .pth → ONNX 导出（自动重映射社区 RRDB 键名）
 │   └── ui_preview.py           离屏渲染全部页面 + 布局/配色/主题程序化审计
 ├── tests/                      266 项测试（pytest）
@@ -418,9 +428,13 @@ python app/main.py --headless          # 端到端自检（模型 + DirectML + F
 ## 打包分发
 
 ```powershell
+python scripts\prepare_vendor.py                                     # 首次构建前准备 FFmpeg
 python -m PyInstaller SuperResolutionTool.spec --noconfirm
 python dist\SuperResolutionTool\SuperResolutionTool.exe --headless   # 产物自检
 ```
+
+`vendor/` 缺 FFmpeg 时 spec 会直接退出并提示运行 `prepare_vendor.py`，而不是抛 PyInstaller
+那句难懂的快照信息（`Unable to find ... when adding binary and data files`）。
 
 - **one-dir 绿色版**（`contents_directory="."`），产物约 **900 MB**：内置 Python 运行时、PySide6、
   ONNX Runtime、FFmpeg / FFprobe（含三厂硬件编码器）与 13 个 ONNX 模型；

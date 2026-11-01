@@ -7,6 +7,19 @@ from PyInstaller.utils.hooks import collect_dynamic_libs, collect_submodules
 
 project_root = Path(SPECPATH).resolve()
 
+_vendor_dir = project_root / "vendor"
+_missing_vendor = [
+    name for name in ("ffmpeg.exe", "ffprobe.exe")
+    if not (_vendor_dir / name).is_file()
+]
+if _missing_vendor:
+    raise SystemExit(
+        "缺少打包所需的 FFmpeg 二进制："
+        + "、".join(f"vendor\\{name}" for name in _missing_vendor)
+        + "\n请先运行一次：python scripts\\prepare_vendor.py"
+        + "\n（下载 gyan.dev 的 FFmpeg 构建，自动解包到 vendor/）"
+    )
+
 onnx_models = [
     (str(path), "models/onnx")
     for path in (project_root / "models" / "onnx").glob("*.onnx")
