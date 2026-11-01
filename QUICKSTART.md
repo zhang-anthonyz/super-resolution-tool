@@ -36,7 +36,7 @@
 SuperResolutionTool\SuperResolutionTool.exe
 ```
 
-- 该目录已内置 Python 运行时、PySide6、ONNX Runtime、FFmpeg 与 14 个 ONNX 模型，
+- 该目录已内置 Python 运行时、PySide6、ONNX Runtime、FFmpeg 与 13 个 ONNX 模型，
   **不需要安装 Python 或任何依赖**。
 - ⚠️ 目录必须整体保留，不要单独把 exe 拷出来 —— 模型、DLL、FFmpeg 都在同级目录里。
 - 建议把整个 `SuperResolutionTool` 文件夹拷到固定位置（如 `D:\Tools\`）再运行。

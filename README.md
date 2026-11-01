@@ -164,7 +164,7 @@
 SuperResolutionTool\SuperResolutionTool.exe
 ```
 
-目录内已含 Python 运行时、PySide6、ONNX Runtime、FFmpeg / FFprobe 与 14 个 ONNX 模型，
+目录内已含 Python 运行时、PySide6、ONNX Runtime、FFmpeg / FFprobe 与 13 个 ONNX 模型，
 **无需安装 Python 或任何依赖**。请整体保留该目录（模型、DLL、FFmpeg 都在同级），建议拷到固定位置再运行。
 
 无界面自检（加载默认模型 → DirectML → 内置 FFmpeg → 实跑一次 4x 超分）：
@@ -368,7 +368,7 @@ super-resolution-tool/
 │   ├── pipelines/              图片管线、视频管线、FFmpeg 调用与探测
 │   └── ui/                     PySide6 界面：主窗口、对比画布、主题令牌、自绘控件、矢量图标、提示条、工作线程
 ├── models/
-│   ├── onnx/                   14 个内置 ONNX 模型（*.onnx 未入库）
+│   ├── onnx/                   13 个内置 ONNX 模型
 │   └── LICENSES.md             模型来源与授权清单
 ├── vendor/                     ffmpeg / ffprobe（未入库）
 ├── scripts/
@@ -423,7 +423,7 @@ python dist\SuperResolutionTool\SuperResolutionTool.exe --headless   # 产物自
 ```
 
 - **one-dir 绿色版**（`contents_directory="."`），产物约 **900 MB**：内置 Python 运行时、PySide6、
-  ONNX Runtime、FFmpeg / FFprobe（含三厂硬件编码器）与 14 个 ONNX 模型；
+  ONNX Runtime、FFmpeg / FFprobe（含三厂硬件编码器）与 13 个 ONNX 模型；
 - spec 细节：排除 `torch / onnx / scipy / pandas / matplotlib` 等开发期依赖；
   采集 `onnxruntime` 与 `shiboken6` 动态库；过滤 `icu*.dll`（某些本地 ICU 构建只导出带版本的 C++ 符号，
   会导致 `QtWidgets` 报 WinError 127）；
