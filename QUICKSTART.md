@@ -62,9 +62,15 @@ python -m pip install -r requirements.txt
 python -m pip install onnxruntime-directml   # AMD / Intel / 通用（DirectML）
 python -m pip install onnxruntime-gpu        # NVIDIA（CUDA EP），两者不要同时装
 
+python scripts\prepare_vendor.py   # 下载 FFmpeg / FFprobe 到 vendor/（首次必跑，约 192 MB）
+
 python app\main.py            # 启动界面
 python app\main.py --headless # 无界面自检
 ```
+
+模型已随仓库提供（`models/onnx/`），只有 FFmpeg 需要上面这一步下载：脚本从 BtbN 的 GitHub
+release 取 GPL 静态构建，解包出 `vendor\ffmpeg.exe` 与 `vendor\ffprobe.exe`，并逐个校验
+nvenc / amf / qsv 硬件编码器存在。需要代理时先设 `HTTPS_PROXY`；想换源加 `--source gyan`。
 
 主题可在「设置 → 外观」里选 `跟随系统 / 浅色 / 深色`，两套「STUDIO」配色（暖纸浅色 / 深炭色 + 玉石绿点缀）整体切换，任务进度条等语义色随主题自动适配，关闭重开不丢。
 
