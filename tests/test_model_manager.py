@@ -18,7 +18,7 @@ from app.ui.ui_logic import resolve_project_path
 def test_builtin_models_cover_real_esrgan_and_swinir():
     models = builtin_models()
 
-    assert len(models) == 12
+    assert len(models) == 11
     by_name = {model.name: model for model in models}
     assert set(by_name) == {
         "realesr-general-x4v3",
@@ -27,7 +27,6 @@ def test_builtin_models_cover_real_esrgan_and_swinir():
         "RealESRGAN_x4plus_fp16",
         "SwinIR_x4_classical",
         "SwinIR_x4_realSR_GAN",
-        "4x-UltraSharp_fp16",
         "realcugan-2x-no-denoise",
         "realcugan-2x-denoise1x",
         "realcugan-2x-denoise2x",
@@ -37,7 +36,6 @@ def test_builtin_models_cover_real_esrgan_and_swinir():
 
     assert by_name["RealESRGAN_x2plus"].scale == 2
     assert by_name["SwinIR_x4_classical"].scale == 4
-    assert by_name["4x-UltraSharp_fp16"].scale == 4
     # Real-CUGAN 2x 5 档：双 UNet 网络、2x、面向 2D 动漫场景
     for name in (
         "realcugan-2x-no-denoise",

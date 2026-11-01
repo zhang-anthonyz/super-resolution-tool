@@ -43,7 +43,7 @@
 - **图片**：单张或批量（递归目录），支持 jpg / png / webp，输出保持原格式，可选回缩原尺寸或按百分比缩放；
 - **视频**：逐帧超分 + 显卡硬件编码（NVENC / AMF / QSV），音频原样复制；
 - **对比预览**：单张任务完成后自动进入对照页，放大镜 / 滑块两种方式核对细节；
-- **12 个内置超分模型 + 2 个降噪模型**（含 2x 真实照片与 5 档 2x 动漫 Real-CUGAN），
+- **11 个内置超分模型 + 2 个降噪模型**（含 2x 真实照片与 5 档 2x 动漫 Real-CUGAN），
   支持导入社区 ONNX 权重，也提供 `.pth → ONNX` 导出脚本。
 
 设计上刻意做了几个"不妥协"的选择：
@@ -191,12 +191,12 @@ python app\main.py --headless   # 无界面自检
 python app\main.py -v           # 展开到每块 tile 的调试日志
 ```
 
-源码运行还需要两样仓库未入库的资源（体积原因，见 `.gitignore`）：
+内置 ONNX 模型随仓库提供（`models/onnx/`，13 个文件、共 255 MB）；源码运行只需要另备 FFmpeg 二进制
+（体积原因未入库，见 `.gitignore`）：
 
 | 资源 | 放置位置 | 获取方式 |
 |---|---|---|
 | FFmpeg / FFprobe | `vendor/ffmpeg.exe`、`vendor/ffprobe.exe` | [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) full build（含三厂硬件编码器） |
-| ONNX 模型 | `models/onnx/*.onnx` | 按下文[内置模型](#内置模型)一节的来源与 `scripts/export_onnx.py` 自行导出 |
 
 ---
 
@@ -248,7 +248,7 @@ python app\main.py -v           # 展开到每块 tile 的调试日志
 
 ## 内置模型
 
-### 超分模型（12 个）
+### 超分模型（11 个）
 
 体积为 ONNX 单文件大小（十进制 MB）。
 
@@ -260,7 +260,6 @@ python app\main.py -v           # 展开到每块 tile 的调试日志
 | `RealESRGAN_x4plus_fp16` | 4x | 33.7 MB | RRDB 重模型，高锐度细节 | BSD-3-Clause |
 | `SwinIR_x4_classical` | 4x | 58.2 MB | 干净图保真度最高（Set5 clean4x **30.68 dB**，比默认高 +6.2 dB），较慢 | Apache-2.0 |
 | `SwinIR_x4_realSR_GAN` | 4x | 57.5 MB | BSRGAN 真实退化训练，纹理自然，较慢 | Apache-2.0 |
-| `4x-UltraSharp_fp16` | 4x | 33.7 MB | 社区锐利模型，细节最锐 | ⚠️ 授权未声明 |
 | `realcugan-2x-no-denoise` | 2x | 2.6 MB | 2D 动漫 2x：Real-CUGAN 双 UNet，保留细节 | MIT |
 | `realcugan-2x-denoise1x` | 2x | 2.6 MB | 2D 动漫 2x：轻度降噪（σ≈12.5） | MIT |
 | `realcugan-2x-denoise2x` | 2x | 2.6 MB | 2D 动漫 2x：中度降噪（σ≈25） | MIT |
@@ -353,7 +352,7 @@ python app\main.py -v           # 展开到每块 tile 的调试日志
 - **分块批处理在 DirectML 上更慢**：batch 2/4/8 为 23.8 / 21.5 / 19.7 ms/块，batch=1 仅 16.8 ms；更大 tile（768/1024）同样更慢；
 - **float32 全图累加器**比直接写 uint8 慢 2.3 倍，且超过 512 MB 会外溢磁盘。
 
-会话加载时间（影响任务启动）：`realesr-general-x4v3` 0.25 s、`4x-UltraSharp_fp16` 0.76 s、SwinIR **3.0 s**——
+会话加载时间（影响任务启动）：`realesr-general-x4v3` 0.25 s、SwinIR **3.0 s**——
 因此超分会话按「后端 + 模型」缓存复用。
 
 ---
@@ -482,8 +481,7 @@ tile 4/9 · 17ms/块 · 剩余 0.08s              # 逐块进度（默认每若�
 | 必须有独立显卡 | 无独显直接拒绝启动（设计行为）；核显机型不受支持 |
 | 视频仅 8bit SDR | 10bit / HDR 输入会被明确拒绝，不会静默降级 |
 | CUDA / TensorRT 路径未实测 | 代码已按 EP 实现，但本机为 AMD，尚缺 NVIDIA 真机验证 |
-| `4x-UltraSharp_fp16` 授权未声明 | 仅供本地个人使用，**不可用于商业分发**；介意授权可自行从模型列表移除 |
-| 模型与二进制不入库 | 仓库不含 `.onnx` / FFmpeg（体积原因），源码运行需按上文自行准备 |
+| FFmpeg 二进制不入库 | 仓库不含 FFmpeg / FFprobe（体积原因），源码运行需按上文自行准备 |
 
 ---
 
@@ -491,7 +489,7 @@ tile 4/9 · 17ms/块 · 剩余 0.08s              # 逐块进度（默认每若�
 
 核心功能已全部落地：环境检测与后端选择、ONNX 推理引擎（DirectML / CUDA / OpenVINO / CPU）、
 图片管线（单张 / 批量 / 尺寸与压缩策略）、视频管线（逐帧 + 硬件编码 + 音频 remux）、
-界面与打包（四页导航 / 对比预览 / 绿色免安装产物）、视觉与模型打磨（12 超分 + 2 降噪）。
+界面与打包（四页导航 / 对比预览 / 绿色免安装产物）、视觉与模型打磨（11 超分 + 2 降噪）。
 
 待办：
 
@@ -530,8 +528,7 @@ SwinIR 单会话加载约 3 s、单块推理更重；换来的收益是干净图
 
 - **本仓库代码**：[MIT](LICENSE)。该许可只覆盖仓库中的源代码，不覆盖下列模型权重与第三方二进制。
 - **内置模型**：均为公开预训练权重的格式转换，各自授权见 [`models/LICENSES.md`](models/LICENSES.md)，
-  其中 `4x-UltraSharp_fp16` **无明确授权、不可商业分发**。模型权重不入库（`.gitignore`），
-  由使用者按来源自行准备。
+  均为 BSD-3-Clause / Apache-2.0 / MIT 等可分发授权。
 - **第三方二进制**：FFmpeg / FFprobe（gyan.dev full build，含 x264 / x265 等 GPL 组件）
   均不入库，由使用者自行获取并遵守其授权。
 - **运行期依赖**：PySide6（LGPL）、ONNX Runtime（MIT）、NumPy（BSD-3）、Pillow（MIT-CMU）。

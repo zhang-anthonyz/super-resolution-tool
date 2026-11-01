@@ -19,7 +19,6 @@ _SR_MODEL_NAMES = (
     "RealESRGAN_x4plus_fp16",
     "SwinIR_x4_classical",
     "SwinIR_x4_realSR_GAN",
-    "4x-UltraSharp_fp16",
     "realcugan-2x-no-denoise",
     "realcugan-2x-denoise1x",
     "realcugan-2x-denoise2x",
@@ -41,7 +40,6 @@ _MODEL_SCALES = {
     "RealESRGAN_x4plus_fp16": 4,
     "SwinIR_x4_classical": 4,
     "SwinIR_x4_realSR_GAN": 4,
-    "4x-UltraSharp_fp16": 4,
     "realesr-general-wdn-x4v3": 4,
     "SwinIR_colorDN25": 1,
     "realcugan-2x-no-denoise": 2,
@@ -61,7 +59,6 @@ _MODEL_PATHS = {
     "RealESRGAN_x4plus_fp16": Path("models/onnx/RealESRGAN_x4plus_fp16.onnx"),
     "SwinIR_x4_classical": Path("models/onnx/SwinIR_x4_classical.onnx"),
     "SwinIR_x4_realSR_GAN": Path("models/onnx/SwinIR_x4_realSR_GAN.onnx"),
-    "4x-UltraSharp_fp16": Path("models/onnx/4x-UltraSharp_fp16.onnx"),
     "SwinIR_colorDN25": Path("models/onnx/SwinIR_colorDN25.onnx"),
     "realcugan-2x-no-denoise": Path("models/onnx/realcugan-2x-no-denoise.onnx"),
     "realcugan-2x-denoise1x": Path("models/onnx/realcugan-2x-denoise1x.onnx"),
@@ -82,9 +79,6 @@ _MODEL_DESCRIPTIONS = {
     ),
     "SwinIR_x4_realSR_GAN": (
         "真实，SwinIR-M 真实世界超分（BSRGAN 退化），纹理自然，无降噪（较慢）"
-    ),
-    "4x-UltraSharp_fp16": (
-        "真实/3D·CG，社区 RRDB 锐利模型（fp16），细节锐度最强，无降噪"
     ),
     "realesr-general-wdn-x4v3": (
         "降噪模型（x4 同倍率），与超分输出按强度插值，强降噪"
@@ -116,7 +110,6 @@ _SCENE_BY_NAME = {
     "RealESRGAN_x4plus_fp16": Scene.REALISTIC,
     "SwinIR_x4_classical": Scene.REALISTIC,
     "SwinIR_x4_realSR_GAN": Scene.REALISTIC,
-    "4x-UltraSharp_fp16": Scene.REALISTIC,
     "realesr-general-wdn-x4v3": Scene.REALISTIC,
     "SwinIR_colorDN25": Scene.REALISTIC,
     "realcugan-2x-no-denoise": Scene.ANIME_2D,

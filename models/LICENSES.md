@@ -13,7 +13,6 @@
 | `SwinIR_x4_classical.onnx` | 超分 4x | [JingyunLiang/SwinIR](https://github.com/JingyunLiang/SwinIR) release `001_classicalSR_DIV2K_s48w8_SwinIR-M_x4.pth` | Apache-2.0 | 双三次退化训练；干净图保真度最高（PSNR 向） |
 | `SwinIR_x4_realSR_GAN.onnx` | 超分 4x | 同上 release `003_realSR_BSRGAN_DFO_s64w8_SwinIR-M_x4_GAN.pth` | Apache-2.0 | BSRGAN 退化训练；真实世界退化更自然 |
 | `SwinIR_colorDN25.onnx` | 降噪 1x | 同上 release `005_colorDN_DFWB_s128w8_SwinIR-M_noise25.pth` | Apache-2.0 | 输入尺度预降噪（σ=25） |
-| `4x-UltraSharp_fp16.onnx` | 超分 4x | 社区权重 `4x-UltraSharp.pth`（Kim2091，原作者仓库已下线，权重以镜像形式流传） | **未声明 / 无明确授权** | ⚠️ 锐度最强，但**不可用于商业分发**；随应用内置由用户明确接受风险后加入 |
 | `realcugan-2x-no-denoise.onnx` | 超分 2x | [bilibili/ailab](https://github.com/bilibili/ailab) `Real-CUGAN` release `updated_weights.zip` → `up2x-latest-no-denoise.pth` | MIT | 双 UNet，2D 动漫 2x，无降噪 |
 | `realcugan-2x-denoise1x.onnx` | 超分 2x | 同上 → `up2x-latest-denoise1x.pth` | MIT | 双 UNet，2D 动漫 2x，轻度降噪（σ≈12.5） |
 | `realcugan-2x-denoise2x.onnx` | 超分 2x | 同上 → `up2x-latest-denoise2x.pth` | MIT | 双 UNet，2D 动漫 2x，中度降噪（σ≈25） |

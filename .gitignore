@@ -5,8 +5,7 @@ __pycache__/
 build/
 dist/
 
-# 模型文件（大文件，不入库）
-models/onnx/*.onnx
+# 模型文件：运行时 .onnx 已入库；以下为导出源 / 调试产物 / 每机状态，不入库
 models/onnx/*.onnx.data
 models/onnx/*.pth
 models/onnx/_source/
