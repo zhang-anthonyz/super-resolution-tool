@@ -66,6 +66,43 @@ def output_dimensions(width: int, height: int, scale: int) -> tuple[int, int]:
     return int(width) * int(scale), int(height) * int(scale)
 
 
+def rotation_turns(rotation: Optional[int]) -> int:
+    """Number of counter-clockwise quarter turns a display matrix asks for.
+
+    ``probe_video`` reports the rotation as counter-clockwise degrees
+    (normalised to 0 / 90 / 180 / 270), matching what FFmpeg's own autorotate
+    applies. Pixel-exact reference (verified against FFmpeg): 90° maps to
+    ``numpy.rot90(k=1)``, 180° to ``k=2`` and 270° to ``k=3``.
+    """
+    if rotation is None:
+        return 0
+    return (int(rotation) % 360) // 90
+
+
+def rotated_dimensions(width: int, height: int, turns: int) -> tuple[int, int]:
+    """Dimensions after applying ``turns`` counter-clockwise quarter turns."""
+    if turns % 2:
+        return int(height), int(width)
+    return int(width), int(height)
+
+
+def rotated_sar(sar: str, turns: int) -> str:
+    """Sample aspect ratio after a quarter turn.
+
+    A quarter turn transposes the pixel grid, so the pixel aspect ratio has
+    to be inverted to keep the display aspect ratio intact (``2:1`` becomes
+    ``1:2``). This is exactly what FFmpeg's own transcode produces.
+    """
+    if not turns % 2 or not sar:
+        return sar
+    if sar in {"0:1", "1:0"}:          # unknown / unset aspect ratio
+        return sar
+    numerator, _, denominator = sar.partition(":")
+    if not numerator.isdigit() or not denominator.isdigit():
+        return sar
+    return f"{denominator}:{numerator}"
+
+
 def _fallback_encoder(codec: VideoCodec | str) -> str:
     if isinstance(codec, str):
         codec = VideoCodec(codec.lower())
@@ -210,7 +247,16 @@ def _encode_video(
     sar: str = "",
     rotation: Optional[int] = None,
 ) -> None:
-    out_width, out_height = output_dimensions(width, height, scale)
+    # The display matrix is applied by us, not by FFmpeg: the decoder runs with
+    # ``-noautorotate`` so the frames always arrive in the *coded* orientation
+    # that ``probe_video`` reported, and the rotation is applied to the decoded
+    # frame below. Letting FFmpeg autorotate instead would hand us frames whose
+    # height/width are swapped for a quarter turn while the probe still reports
+    # the coded size, and the raw frame would then be reshaped with the wrong
+    # stride (measured: the picture comes out diagonally sheared).
+    turns = rotation_turns(rotation)
+    display_width, display_height = rotated_dimensions(width, height, turns)
+    out_width, out_height = output_dimensions(display_width, display_height, scale)
     frame_size = width * height * 3
 
     decoder_args = [
@@ -219,6 +265,7 @@ def _encode_video(
         "-loglevel",
         "error",
         "-nostdin",
+        "-noautorotate",
         "-i",
         str(input_path),
         "-map",
@@ -254,9 +301,13 @@ def _encode_video(
         *_encoder_quality_args(encoder),
     ]
     if sar and sar not in {"0:1", "1:1"}:
-        encoder_args.extend(["-vf", f"setsar={sar.replace(':', '/')}"])
-    if rotation is not None:
-        encoder_args.extend(["-metadata:s:v:0", f"rotate={rotation}"])
+        output_sar = rotated_sar(sar, turns)
+        if output_sar not in {"0:1", "1:1"}:
+            encoder_args.extend(["-vf", f"setsar={output_sar.replace(':', '/')}"])
+    # No display matrix is written to the output: the rotation is already
+    # baked into the pixels (see the decoder note above), and FFmpeg's
+    # ``-metadata:s:v:0 rotate=`` tag is dropped by modern MP4/MOV muxers
+    # anyway, so a matrix could not be preserved reliably.
     encoder_args.extend(["-y", str(output_path)])
 
     try:
@@ -290,6 +341,14 @@ def _encode_video(
                 )
 
             frame = np.frombuffer(raw_frame, dtype=np.uint8).reshape((height, width, 3))
+            if turns % 4:
+                # Rotate into display orientation before upscaling. This is the
+                # step that was missing: FFmpeg delivers the *coded* frame
+                # (because of ``-noautorotate``) while the model and the
+                # encoder both work in display orientation, so the rotation has
+                # to happen here. ``np.rot90`` matches FFmpeg's own autorotate
+                # pixel for pixel (verified for 90°, 180° and 270°).
+                frame = np.ascontiguousarray(np.rot90(frame, turns))
             if plan.pre_strength > 0.0:
                 frame = engine.pre_denoise(frame, plan.pre_strength)
             upscaled = engine.upscale_image(

@@ -159,7 +159,7 @@ python app\main.py --headless # 无界面自检
 
 ## 7. 模型与降噪速查
 
-内置 12 个超分模型（`models/onnx/`）：
+内置 11 个超分模型（`models/onnx/`）：
 
 | 模型 | 倍率 | 定位 |
 |---|---|---|
@@ -169,7 +169,6 @@ python app\main.py --headless # 无界面自检
 | RealESRGAN_x4plus_fp16 | 4x | RRDB 重模型，高锐度 |
 | SwinIR_x4_classical | 4x | 干净图保真度最高，较慢 |
 | SwinIR_x4_realSR_GAN | 4x | 真实退化，纹理自然，较慢 |
-| 4x-UltraSharp_fp16 | 4x | 社区锐利模型，细节最锐 |
 | realcugan-2x-no-denoise | 2x | 2D 动漫 2x：Real-CUGAN 双 UNet，保留细节 |
 | realcugan-2x-denoise1x | 2x | 2D 动漫 2x：轻度降噪（σ≈12.5） |
 | realcugan-2x-denoise2x | 2x | 2D 动漫 2x：中度降噪（σ≈25） |

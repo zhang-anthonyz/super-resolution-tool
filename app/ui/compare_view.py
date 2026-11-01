@@ -57,6 +57,7 @@ from PySide6.QtWidgets import (
 
 from . import icons as icons_mod
 from . import theme
+from ..core.image_io import composite_over_white, orient_source
 
 #: Preview budget per image (QImage costs 3 bytes per pixel here).
 MAX_PREVIEW_PIXELS = 20_000_000
@@ -159,9 +160,13 @@ def _load_qimage(path: Path, max_pixels: int) -> tuple[QImage, tuple[int, int], 
 
     Pillow does the decoding (it already handles every format the pipeline can
     write, without depending on Qt's image plugins being bundled).
+
+    The EXIF orientation is applied here, exactly as the pipeline does it, so
+    the original and the super-resolved output stay aligned in the comparison.
     """
     with Image.open(path) as source:
-        image = source.convert("RGB")
+        oriented, _exif = orient_source(source)
+        image = composite_over_white(oriented)
         true_size = (image.width, image.height)
         scale = 1.0
         pixels = image.width * image.height
